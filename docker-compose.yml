@@ -1,0 +1,12 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "${OAUTH_PORT:-3000}:3000"
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:

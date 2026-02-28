@@ -1,0 +1,88 @@
+import { LinearClient } from "@linear/sdk";
+import { config } from "../config.js";
+
+const client = new LinearClient({ apiKey: config.linear.apiKey });
+
+export async function searchIssues(query: string) {
+  const results = await client.searchIssues(query);
+  return results.nodes.map((issue) => ({
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    description: issue.description,
+    priority: issue.priority,
+    url: issue.url,
+  }));
+}
+
+export async function getIssue(issueId: string) {
+  const issue = await client.issue(issueId);
+  const state = await issue.state;
+  const assignee = await issue.assignee;
+  const team = await issue.team;
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    description: issue.description,
+    priority: issue.priority,
+    url: issue.url,
+    state: state ? { id: state.id, name: state.name } : null,
+    assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+    team: team ? { id: team.id, name: team.name, key: team.key } : null,
+  };
+}
+
+export async function createIssue(
+  teamId: string,
+  title: string,
+  description?: string,
+  priority?: number
+) {
+  const result = await client.createIssue({
+    teamId,
+    title,
+    description,
+    priority,
+  });
+  const issue = await result.issue;
+  return issue
+    ? { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url }
+    : null;
+}
+
+export async function updateIssue(
+  issueId: string,
+  fields: { stateId?: string; assigneeId?: string; priority?: number; title?: string; description?: string }
+) {
+  const result = await client.updateIssue(issueId, fields);
+  const issue = await result.issue;
+  return issue
+    ? { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url }
+    : null;
+}
+
+export async function addComment(issueId: string, body: string) {
+  const result = await client.createComment({ issueId, body });
+  const comment = await result.comment;
+  return comment ? { id: comment.id, body: comment.body } : null;
+}
+
+export async function listTeams() {
+  const teams = await client.teams();
+  return teams.nodes.map((team) => ({
+    id: team.id,
+    name: team.name,
+    key: team.key,
+  }));
+}
+
+export async function getWorkflowStates(teamId: string) {
+  const team = await client.team(teamId);
+  const states = await team.states();
+  return states.nodes.map((state) => ({
+    id: state.id,
+    name: state.name,
+    type: state.type,
+  }));
+}
