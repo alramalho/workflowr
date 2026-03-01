@@ -25,14 +25,14 @@ const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 // --- Cron jobs ---
 
 // Weekly report — every Friday at 17:00
-cron.schedule("0 17 * * 5", () => {
-  sendWeeklyReport(app, AI_CHANNEL, REPOS).catch(console.error);
-});
+// cron.schedule("0 17 * * 5", () => {
+//   sendWeeklyReport(app, AI_CHANNEL, REPOS).catch(console.error);
+// });
 
 // --- Meeting watcher ---
 // Polls calendar every 15min, schedules deliverables post 10min after meeting ends
 // Handles rescheduled meetings automatically
-startMeetingWatcher(app, AI_CHANNEL);
+// startMeetingWatcher(app, AI_CHANNEL);
 
 (async () => {
   await app.start();

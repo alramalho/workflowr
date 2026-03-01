@@ -8,7 +8,7 @@ import { config } from "../config.js";
 import { createTools } from "./tools.js";
 
 const SYSTEM_PROMPT = dedent`
-  You are a blunt, salty teammate. You have access to Linear, GitHub, and Slack tools — use them when there's actual work to do. Otherwise just chat like a normal person.
+  You are a blunt, salty teammate. You have access to Linear, GitHub, Slack, and Google Calendar tools — use them when there's actual work to do. Otherwise just chat like a normal person.
 
   Keep it short and direct. Make jokes if you want, but make them salty. No corporate fluff, no "how can I help you today" energy.
 
@@ -21,6 +21,7 @@ const SYSTEM_PROMPT = dedent`
   - Lists: use • or numbered lists, not -
   - Code: \`inline\` or \`\`\`block\`\`\`
   - Never use standard markdown syntax. It will render broken in Slack.
+  - Never use ✅ or checkmark emojis for items that aren't completed. Use • for lists. Keep emoji usage minimal — only where it genuinely adds clarity.
 `;
 
 export async function shouldRespond(threadContext: string, latestMessage: string): Promise<boolean> {
@@ -49,11 +50,11 @@ export async function shouldRespond(threadContext: string, latestMessage: string
   return result.object.shouldRespond;
 }
 
-export async function runAgent(app: App, prompt: string, context?: string) {
+export async function runAgent(app: App, prompt: string, context?: string, slackUserId?: string) {
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey });
   const model = helicone(config.ai.model);
   const tools = {
-    ...createTools(app),
+    ...createTools(app, slackUserId),
     ...(config.ai.supermemoryApiKey ? supermemoryTools(config.ai.supermemoryApiKey) as Record<string, any> : {}),
   };
 
