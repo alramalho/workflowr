@@ -1,6 +1,13 @@
 import type { App } from "@slack/bolt";
 import { runAgent, shouldRespond } from "../agent/index.js";
-import { getThreadReplies, getChannelHistory } from "../integrations/slack.js";
+import { getThreadReplies, getChannelHistory, isChannelWritable } from "../integrations/slack.js";
+
+const ALLOWED_USERS = new Set([
+  "U08PH00GP9Q", // Alex
+  "U08U7U3AETF", // Aviral
+  "U09SF8QLZBP", // Vaibhav
+  "U0ACFP1UT2N", // Leandro
+]);
 
 let botUserId: string | undefined;
 const activeThreads = new Set<string>();
@@ -17,18 +24,29 @@ export function registerEvents(app: App) {
   app.message(async ({ message, say }) => {
     if (message.subtype) return;
     if (!("text" in message) || !message.text) return;
+    if (!("user" in message) || !ALLOWED_USERS.has(message.user as string)) return;
 
     const userId = await getBotUserId(app);
+    const isDM = "channel_type" in message && message.channel_type === "im";
     const isMentioned = message.text.includes(`<@${userId}>`);
     const threadTs = "thread_ts" in message ? message.thread_ts : undefined;
     const isActiveThread = threadTs && activeThreads.has(threadTs);
 
-    if (!isMentioned && !isActiveThread) return;
+    if (!isMentioned && !isActiveThread && !isDM) return;
 
     const userMessage = message.text.replace(`<@${userId}>`, "").trim();
     if (!userMessage) return;
 
     const channel = message.channel;
+
+    if (!isDM && !(await isChannelWritable(app, channel))) {
+      await app.client.chat.postEphemeral({
+        channel,
+        user: message.user as string,
+        text: "I can't respond in this channel. Try messaging me directly or in an allowed channel.",
+      });
+      return;
+    }
     const replyTs = threadTs ?? message.ts;
 
     // activate thread on first mention

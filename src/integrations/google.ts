@@ -40,23 +40,60 @@ export async function getUpcomingEvents(slackUserId: string, calendarId = "prima
   return data.items ?? [];
 }
 
-export async function getRecentMeetingNotes(slackUserId: string, calendarId = "primary") {
+export async function searchEvents(
+  slackUserId: string,
+  opts: { query?: string; daysBack?: number; daysForward?: number; calendarId?: string } = {}
+) {
+  const { query, daysBack = 7, daysForward = 0, calendarId = "primary" } = opts;
+  const auth = getAuthClient(slackUserId);
+  const calendar = google.calendar({ version: "v3", auth });
+
+  const now = new Date();
+  const timeMin = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
+  const timeMax = new Date(now.getTime() + daysForward * 24 * 60 * 60 * 1000);
+
+  const { data } = await calendar.events.list({
+    calendarId,
+    timeMin: timeMin.toISOString(),
+    timeMax: timeMax.toISOString(),
+    singleEvents: true,
+    orderBy: "startTime",
+    q: query,
+  });
+
+  return (data.items ?? []).map((e) => ({
+    id: e.id,
+    summary: e.summary,
+    start: e.start?.dateTime ?? e.start?.date,
+    end: e.end?.dateTime ?? e.end?.date,
+    description: e.description,
+    attendees: e.attendees?.map((a) => a.email),
+    hasAttachments: !!e.attachments?.length,
+  }));
+}
+
+export async function getEventNotes(
+  slackUserId: string,
+  opts: { query?: string; daysBack?: number; calendarId?: string } = {}
+) {
+  const { query, daysBack = 7, calendarId = "primary" } = opts;
   const auth = getAuthClient(slackUserId);
   const calendar = google.calendar({ version: "v3", auth });
   const docs = google.docs({ version: "v1", auth });
 
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const now = new Date();
+  const timeMin = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
 
   const { data: events } = await calendar.events.list({
     calendarId,
-    timeMin: yesterday.toISOString(),
+    timeMin: timeMin.toISOString(),
     timeMax: now.toISOString(),
     singleEvents: true,
     orderBy: "startTime",
+    q: query,
   });
 
-  const results: Array<{ event: string; transcript: string }> = [];
+  const results: Array<{ event: string; date: string | undefined; transcript: string }> = [];
 
   for (const event of events.items ?? []) {
     if (!event.attachments) continue;
@@ -74,7 +111,11 @@ export async function getRecentMeetingNotes(slackUserId: string, calendarId = "p
           .join("")
           ?? "";
 
-        results.push({ event: event.summary ?? "Untitled", transcript: text });
+        results.push({
+          event: event.summary ?? "Untitled",
+          date: event.start?.dateTime ?? event.start?.date ?? undefined,
+          transcript: text,
+        });
       }
     }
   }

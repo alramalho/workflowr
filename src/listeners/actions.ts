@@ -1,5 +1,6 @@
 import type { App } from "@slack/bolt";
 import * as sm from "../integrations/supermemory.js";
+import { translateThread, translateMessage } from "../integrations/translate.js";
 
 interface Memory {
   id: string;
@@ -92,6 +93,58 @@ export function buildMemoryBlocks(
 }
 
 export function registerActions(app: App) {
+  // message shortcut: Translate message or thread
+  app.shortcut("translate_thread", async ({ shortcut, ack, client }) => {
+    await ack();
+
+    if (shortcut.type !== "message_action") return;
+
+    const { channel, message, user } = shortcut;
+    const teamDomain = shortcut.team?.domain ?? "slack";
+    const threadTs = (message as any).thread_ts;
+    const isReply = threadTs && threadTs !== message.ts;
+
+    // always reply inside a thread
+    const replyTs = threadTs ?? message.ts;
+
+    if (!isReply) {
+      try {
+        await client.chat.postEphemeral({
+          channel: channel.id,
+          user: user.id,
+          thread_ts: replyTs,
+          text: "_⏳ translating..._",
+        });
+      } catch {
+        // channel not accessible — fall through, DM will handle errors below
+      }
+    }
+
+    try {
+      const msgFiles = (message as any).files as any[] | undefined;
+      const imgTags = msgFiles?.filter((f: any) => f.mimetype?.startsWith("image/")).map(() => "[image]").join(" ") ?? "";
+      const msgText = ((message as any).text ?? "") + (imgTags ? "\n" + imgTags : "");
+
+      const result = isReply
+        ? await translateMessage(app, channel.id, message.ts, msgText, (message as any).user, teamDomain)
+        : await translateThread(app, channel.id, message.ts, teamDomain, user.id);
+
+      await client.chat.postEphemeral({
+        channel: channel.id,
+        user: user.id,
+        thread_ts: replyTs,
+        text: result,
+      });
+    } catch (error) {
+      console.error("Translate shortcut error:", error);
+      const reason = error instanceof Error ? error.message : String(error);
+      await client.chat.postMessage({
+        channel: user.id,
+        text: `Translation failed: ${reason}`,
+      }).catch(() => {});
+    }
+  });
+
   // delete a memory
   app.action(/^memory_delete_.+/, async ({ action, ack, respond }) => {
     await ack();

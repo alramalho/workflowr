@@ -1,11 +1,11 @@
 import type { App } from "@slack/bolt";
-import { getRecentMeetingNotes } from "../integrations/google.js";
+import { getEventNotes } from "../integrations/google.js";
 import { postMessage } from "../integrations/slack.js";
 import { getAllTokens } from "../db/tokens.js";
 
 export async function sendMeetingDeliverables(app: App, channel: string, slackUserId?: string) {
   if (slackUserId) {
-    const notes = await getRecentMeetingNotes(slackUserId);
+    const notes = await getEventNotes(slackUserId, { daysBack: 1 });
     if (notes.length === 0) return;
 
     for (const { event, transcript } of notes) {
@@ -16,7 +16,7 @@ export async function sendMeetingDeliverables(app: App, channel: string, slackUs
     const users = getAllTokens();
     for (const { slack_user_id } of users) {
       try {
-        const notes = await getRecentMeetingNotes(slack_user_id);
+        const notes = await getEventNotes(slack_user_id, { daysBack: 1 });
         if (notes.length === 0) continue;
 
         for (const { event, transcript } of notes) {
