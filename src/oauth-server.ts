@@ -1,13 +1,31 @@
+import type { App as SlackApp } from "@slack/bolt";
 import express from "express";
 import { google } from "googleapis";
 import { config } from "./config.js";
 import { upsertToken } from "./db/tokens.js";
+import { sendWeeklyReport } from "./jobs/weekly-report.js";
 
-export function startOAuthServer(port: number) {
+interface ServerOptions {
+  slackApp: SlackApp;
+  channel: string;
+  repos: { owner: string; repo: string }[];
+}
+
+export function startOAuthServer(port: number, opts: ServerOptions) {
   const app = express();
 
   app.get("/health", (_req, res) => {
     res.send("ok");
+  });
+
+  app.post("/trigger/weekly-report", async (_req, res) => {
+    try {
+      await sendWeeklyReport(opts.slackApp, opts.channel, opts.repos);
+      res.send("Weekly report sent.");
+    } catch (err) {
+      console.error("Manual weekly report error:", err);
+      res.status(500).send("Failed to send weekly report.");
+    }
   });
 
   app.get("/auth/google/callback", async (req, res) => {
