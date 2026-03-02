@@ -3,6 +3,8 @@ import { google } from "googleapis";
 import { config } from "../config.js";
 import { getToken, deleteToken } from "../db/tokens.js";
 import { sendWeeklyReport } from "../jobs/weekly-report.js";
+import * as sm from "../integrations/supermemory.js";
+import { buildMemoryBlocks } from "./actions.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -14,30 +16,6 @@ const GOOGLE_SCOPES = [
 ];
 
 export function registerCommands(app: App) {
-  app.command("/weekly-report", async ({ command, ack }) => {
-    await ack();
-    await sendWeeklyReport(app, command.channel_id, REPOS);
-  });
-
-  app.command("/meeting-notes", async ({ command, ack }) => {
-    await ack();
-
-    const token = getToken(command.user_id);
-    if (!token) {
-      await app.client.chat.postEphemeral({
-        channel: command.channel_id,
-        user: command.user_id,
-        text: "You haven't connected your Google account yet. Use `/google-auth` first.",
-      });
-      return;
-    }
-
-    const { sendMeetingDeliverables } = await import(
-      "../jobs/meeting-deliverables.js"
-    );
-    await sendMeetingDeliverables(app, command.channel_id, command.user_id);
-  });
-
   app.command("/google-auth", async ({ command, ack }) => {
     await ack();
 
@@ -99,5 +77,46 @@ export function registerCommands(app: App) {
       user: command.user_id,
       text: "Google account disconnected.",
     });
+  });
+
+  app.command("/memory", async ({ command, ack }) => {
+    await ack();
+
+    if (!config.ai.supermemoryApiKey) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Memory is not configured on this bot.",
+      });
+      return;
+    }
+
+    try {
+      const [userRes, orgRes] = await Promise.all([
+        sm.listMemories(sm.userTag(command.user_id)),
+        command.team_id
+          ? sm.listMemories(sm.orgTag(command.team_id))
+          : Promise.resolve({ memories: [] }),
+      ]);
+
+      const blocks = buildMemoryBlocks(
+        userRes.memories,
+        orgRes.memories,
+      );
+
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Your memories",
+        blocks,
+      });
+    } catch (error) {
+      console.error("Memory command error:", error);
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Something went wrong fetching memories.",
+      });
+    }
   });
 }

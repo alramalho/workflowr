@@ -3,9 +3,9 @@ import { z } from "zod";
 import { createHelicone } from "@helicone/ai-sdk-provider";
 import type { App } from "@slack/bolt";
 import dedent from "dedent";
-import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import { config } from "../config.js";
 import { createTools } from "./tools.js";
+import * as sm from "../integrations/supermemory.js";
 
 const SYSTEM_PROMPT = dedent`
   You are a blunt, salty teammate. You have access to Linear, GitHub, Slack, and Google Calendar tools — use them when there's actual work to do. Otherwise just chat like a normal person.
@@ -50,19 +50,44 @@ export async function shouldRespond(threadContext: string, latestMessage: string
   return result.object.shouldRespond;
 }
 
-export async function runAgent(app: App, prompt: string, context?: string, slackUserId?: string) {
+export async function runAgent(
+  app: App,
+  prompt: string,
+  context?: string,
+  slackUserId?: string,
+  teamId?: string,
+) {
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey });
   const model = helicone(config.ai.model);
-  const tools = {
-    ...createTools(app, slackUserId),
-    ...(config.ai.supermemoryApiKey ? supermemoryTools(config.ai.supermemoryApiKey) as Record<string, any> : {}),
-  };
+  const tools = createTools(app, slackUserId, teamId);
+
+  let systemPrompt = SYSTEM_PROMPT;
+
+  // proactive memory retrieval
+  if (config.ai.supermemoryApiKey && slackUserId) {
+    try {
+      const tags = [sm.userTag(slackUserId)];
+      if (teamId) tags.push(sm.orgTag(teamId));
+      const results = await sm.searchMemories(prompt, tags, 5);
+      if (results.length > 0) {
+        const memories = results
+          .map((r) => {
+            const text = r.chunks?.map((c) => c.content).join(" ") ?? r.summary ?? r.title;
+            return `- ${text}`;
+          })
+          .join("\n");
+        systemPrompt += `\n\nRelevant memories:\n${memories}`;
+      }
+    } catch (e) {
+      console.error("Memory retrieval failed:", e);
+    }
+  }
 
   const fullPrompt = context ? `${context}\n\nUser message: ${prompt}` : prompt;
 
   const result = await generateText({
     model,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     prompt: fullPrompt,
     tools,
     stopWhen: stepCountIs(15),

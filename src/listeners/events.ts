@@ -67,7 +67,8 @@ export function registerEvents(app: App) {
     await app.client.reactions.add({ channel, name: "eyes", timestamp: message.ts });
 
     try {
-      const response = await runAgent(app, userMessage, context || undefined);
+      const teamId = "team" in message ? (message.team as string | undefined) : undefined;
+      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId);
       await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts });
       await say({ text: response || "I couldn't generate a response.", thread_ts: replyTs });
     } catch (error) {

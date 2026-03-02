@@ -160,12 +160,8 @@ export function createTools(app: App, slackUserId?: string, teamId?: string) {
     }),
 
     // Slack canvas tools
-    // NOTE: Canvas content uses STANDARD MARKDOWN, not Slack mrkdwn.
-    // Use ## headings, - bullets, **bold**, [text](url).
-    // User mentions: ![](@U08PH00GP9Q) — NOT <@U08PH00GP9Q>.
-    // Channel mentions: ![](#C123ABC456).
     slack_create_canvas: tool({
-      description: "Create a standalone Slack canvas. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+      description: "Create a standalone Slack canvas. Content uses standard markdown: ## headings, - bullets, **bold**, [text](url). Mentions use normal Slack format <@UXXXXXXXX>.",
       inputSchema: z.object({
         title: z.string().optional(),
         markdown: z.string().optional().describe("Initial canvas content in standard markdown"),
@@ -174,7 +170,7 @@ export function createTools(app: App, slackUserId?: string, teamId?: string) {
         createCanvas(app, title, markdown),
     }),
     slack_create_channel_canvas: tool({
-      description: "Create a canvas pinned to a Slack channel. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+      description: "Create a canvas pinned to a Slack channel. Content uses standard markdown: ## headings, - bullets, **bold**, [text](url). Mentions use normal Slack format <@UXXXXXXXX>.",
       inputSchema: z.object({
         channel: z.string().describe("Channel ID"),
         title: z.string().optional(),
@@ -185,7 +181,7 @@ export function createTools(app: App, slackUserId?: string, teamId?: string) {
     }),
     slack_edit_canvas: tool({
       description:
-        "Edit a Slack canvas. Use slack_lookup_canvas_sections first to get section IDs for targeted edits. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+        "Edit a Slack canvas. Use slack_lookup_canvas_sections first to get section IDs for targeted edits. Content uses standard markdown: ## headings, - bullets, **bold**, [text](url). Mentions use normal Slack format <@UXXXXXXXX>.",
       inputSchema: z.object({
         canvasId: z.string(),
         operation: z.enum([
