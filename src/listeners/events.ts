@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import { runAgent, shouldRespond } from "../agent/index.js";
-import { getThreadReplies, getChannelHistory, isChannelWritable } from "../integrations/slack.js";
+import { getThreadReplies, getChannelHistory, isChannelWritable, WRITABLE_CHANNELS } from "../integrations/slack.js";
 
 const ALLOWED_USERS = new Set([
   "U08PH00GP9Q", // Alex
@@ -43,7 +43,7 @@ export function registerEvents(app: App) {
       await app.client.chat.postEphemeral({
         channel,
         user: message.user as string,
-        text: "I can't respond in this channel. Try messaging me directly or in an allowed channel.",
+        text: `I'm not only allowed to respond publicly in this channel, only in ${Object.values(WRITABLE_CHANNELS).map((id) => `<#${id}>`).join(", ")}. Ask <@U08PH00GP9Q> if you need this changed.`,
       });
       return;
     }

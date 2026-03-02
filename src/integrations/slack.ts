@@ -1,14 +1,17 @@
 import type { App } from "@slack/bolt";
 
-const WRITABLE_CHANNELS: string[] = ["ai"];
+export const WRITABLE_CHANNELS: Record<string, string> = {
+  ai: "C09SRBNHLF5",
+};
 
 export async function isChannelWritable(app: App, channelId: string): Promise<boolean> {
-  if (WRITABLE_CHANNELS.length === 0) return true;
+  const names = Object.keys(WRITABLE_CHANNELS);
+  if (names.length === 0) return true;
   try {
     const info = await app.client.conversations.info({ channel: channelId });
     const ch = info.channel as any;
     if (ch?.is_im || ch?.is_mpim) return true;
-    return ch?.name ? WRITABLE_CHANNELS.includes(ch.name) : false;
+    return ch?.name ? ch.name in WRITABLE_CHANNELS : false;
   } catch {
     return false;
   }
