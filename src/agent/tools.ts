@@ -3,9 +3,19 @@ import { z } from "zod";
 import type { App } from "@slack/bolt";
 import * as linear from "../integrations/linear.js";
 import * as github from "../integrations/github.js";
-import { getChannelHistory, getThreadReplies } from "../integrations/slack.js";
+import * as googleCal from "../integrations/google.js";
+import {
+  getChannelHistory,
+  getThreadReplies,
+  createCanvas,
+  createChannelCanvas,
+  editCanvas,
+  lookupCanvasSections,
+} from "../integrations/slack.js";
+import * as sm from "../integrations/supermemory.js";
+import { config } from "../config.js";
 
-export function createTools(app: App) {
+export function createTools(app: App, slackUserId?: string, teamId?: string) {
   return {
     // Linear tools
     linear_search_issues: tool({
@@ -148,5 +158,130 @@ export function createTools(app: App) {
       execute: async ({ channel, threadTs }) =>
         getThreadReplies(app, channel, threadTs),
     }),
+
+    // Slack canvas tools
+    // NOTE: Canvas content uses STANDARD MARKDOWN, not Slack mrkdwn.
+    // Use ## headings, - bullets, **bold**, [text](url).
+    // User mentions: ![](@U08PH00GP9Q) — NOT <@U08PH00GP9Q>.
+    // Channel mentions: ![](#C123ABC456).
+    slack_create_canvas: tool({
+      description: "Create a standalone Slack canvas. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+      inputSchema: z.object({
+        title: z.string().optional(),
+        markdown: z.string().optional().describe("Initial canvas content in standard markdown"),
+      }),
+      execute: async ({ title, markdown }) =>
+        createCanvas(app, title, markdown),
+    }),
+    slack_create_channel_canvas: tool({
+      description: "Create a canvas pinned to a Slack channel. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+      inputSchema: z.object({
+        channel: z.string().describe("Channel ID"),
+        title: z.string().optional(),
+        markdown: z.string().optional().describe("Initial canvas content in standard markdown"),
+      }),
+      execute: async ({ channel, title, markdown }) =>
+        createChannelCanvas(app, channel, title, markdown),
+    }),
+    slack_edit_canvas: tool({
+      description:
+        "Edit a Slack canvas. Use slack_lookup_canvas_sections first to get section IDs for targeted edits. Content must be standard markdown (NOT Slack mrkdwn): use ## headings, - bullets, **bold**, [text](url). For user mentions use ![](@UXXXXXXXX), for channels use ![](#CXXXXXXXX).",
+      inputSchema: z.object({
+        canvasId: z.string(),
+        operation: z.enum([
+          "insert_at_start",
+          "insert_at_end",
+          "insert_after",
+          "insert_before",
+          "replace",
+          "delete",
+          "rename",
+        ]),
+        markdown: z.string().optional().describe("Content for insert/replace operations"),
+        sectionId: z.string().optional().describe("Target section for positional operations"),
+        title: z.string().optional().describe("New title for rename operation"),
+      }),
+      execute: async ({ canvasId, operation, markdown, sectionId, title }) =>
+        editCanvas(app, canvasId, operation, { markdown, sectionId, title }),
+    }),
+    slack_lookup_canvas_sections: tool({
+      description: "Find sections in a Slack canvas by heading type or text content",
+      inputSchema: z.object({
+        canvasId: z.string(),
+        sectionTypes: z.array(z.enum(["h1", "h2", "h3", "any_header"])).optional(),
+        containsText: z.string().optional(),
+      }),
+      execute: async ({ canvasId, sectionTypes, containsText }) =>
+        lookupCanvasSections(app, canvasId, { sectionTypes, containsText }),
+    }),
+
+    // Google Calendar tools
+    ...(slackUserId
+      ? {
+          google_search_events: tool({
+            description:
+              "Search Google Calendar events. Use to find meetings, check schedules, or look up past/upcoming events.",
+            inputSchema: z.object({
+              query: z.string().optional().describe("Text to search for in event titles/descriptions"),
+              daysBack: z.number().optional().describe("How many days in the past to search (default 7)"),
+              daysForward: z.number().optional().describe("How many days in the future to search (default 0)"),
+            }),
+            execute: async ({ query, daysBack, daysForward }) =>
+              googleCal.searchEvents(slackUserId, { query, daysBack, daysForward }),
+          }),
+          google_get_meeting_notes: tool({
+            description:
+              "Get notes/transcripts from Google Docs attached to calendar events. Use for meeting deliverables, action items, or summaries.",
+            inputSchema: z.object({
+              query: z.string().optional().describe("Text to search for in event titles (e.g. 'AI meeting')"),
+              daysBack: z.number().optional().describe("How many days back to search (default 7)"),
+            }),
+            execute: async ({ query, daysBack }) =>
+              googleCal.getEventNotes(slackUserId, { query, daysBack }),
+          }),
+        }
+      : {}),
+
+    // Memory tools
+    ...(config.ai.supermemoryApiKey && slackUserId
+      ? {
+          memory_search: tool({
+            description:
+              "Search saved memories. Use to recall preferences, past decisions, or any stored context about the user or their team.",
+            inputSchema: z.object({
+              query: z.string().describe("What to search for in memories"),
+            }),
+            execute: async ({ query }) => {
+              const tags = [sm.userTag(slackUserId)];
+              if (teamId) tags.push(sm.orgTag(teamId));
+              const results = await sm.searchMemories(query, tags, 5);
+              return results.map((r) => ({
+                title: r.title,
+                content: r.chunks?.map((c) => c.content).join("\n") ?? r.summary,
+                score: r.score,
+              }));
+            },
+          }),
+          memory_add: tool({
+            description:
+              "Save a new memory. Use when the user explicitly asks you to remember something, or when they share a clear preference/decision worth persisting.",
+            inputSchema: z.object({
+              content: z.string().describe("The memory content to save"),
+              scope: z
+                .enum(["user", "org"])
+                .describe("'user' for personal memories, 'org' for team-wide memories"),
+            }),
+            execute: async ({ content, scope }) => {
+              const tag =
+                scope === "user"
+                  ? sm.userTag(slackUserId)
+                  : teamId
+                    ? sm.orgTag(teamId)
+                    : sm.userTag(slackUserId);
+              return sm.addMemory(content, tag);
+            },
+          }),
+        }
+      : {}),
   };
 }
