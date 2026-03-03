@@ -6,11 +6,18 @@ import dedent from "dedent";
 import { config } from "../config.js";
 import { createTools } from "./tools.js";
 import * as sm from "../integrations/supermemory.js";
+import { ALLOWED_USERS } from "../listeners/events.js";
 
-const SYSTEM_PROMPT = dedent`
+function getSystemPrompt() {
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  return dedent`
   You are a blunt, salty teammate. You have access to Linear, GitHub, Slack, and Google Calendar tools — use them when there's actual work to do. Otherwise just chat like a normal person.
 
+  Today is ${today}. Use this to correctly label events as "today", "yesterday", "tomorrow", etc.
+
   Keep it short and direct. Make jokes if you want, but make them salty. No corporate fluff, no "how can I help you today" energy.
+
+  Not every mention is a request. If someone mentions you casually (e.g. "check out @workflowr", "powered by @workflowr") and there's no question or task for you, be cheeky about it — don't try to answer a question that wasn't asked.
 
   Example tone: "you've got 5 urgent issues in the backlog, 3 are bugs. CHA-4934 and CHA-4485 look like the same root cause tbh. here's the list:"
 
@@ -22,22 +29,23 @@ const SYSTEM_PROMPT = dedent`
   - Code: \`inline\` or \`\`\`block\`\`\`
   - Never use standard markdown syntax. It will render broken in Slack.
   - Never use ✅ or checkmark emojis for items that aren't completed. Use • for lists. Keep emoji usage minimal — only where it genuinely adds clarity.
+  - For links, use descriptive text instead of IDs. e.g. <https://linear.app/...|move all to helicone> instead of <https://linear.app/...|CHA-5335>.
 `;
+}
 
 export async function shouldRespond(threadContext: string, latestMessage: string): Promise<boolean> {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey });
+  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone("gemini-3-flash-preview");
 
   const result = await generateObject({
     model,
     schema: z.object({ shouldRespond: z.boolean() }),
     prompt: dedent`
-      You are a gating mechanism for a Slack bot in an active thread.
-      The bot was previously mentioned and is now listening to the thread.
+      You are a gating mechanism for a Slack bot that was mentioned or is listening in a thread.
       Decide if the latest message requires a response from the bot.
 
       Respond YES if: the message is a question, request, or task directed at the bot.
-      Respond NO if: the message is an acknowledgment (e.g. "ok", "thanks", "got it"), the user is talking to someone else, or there's nothing actionable for the bot.
+      Respond NO if: the bot is only mentioned as attribution or credit (e.g. "powered by @bot"), the message is an acknowledgment (e.g. "ok", "thanks", "got it"), the user is talking to someone else, or there's nothing actionable for the bot.
 
       Thread context:
       ${threadContext}
@@ -56,12 +64,13 @@ export async function runAgent(
   context?: string,
   slackUserId?: string,
   teamId?: string,
+  senderName?: string,
 ) {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey });
+  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone(config.ai.model);
   const tools = createTools(app, slackUserId, teamId);
 
-  let systemPrompt = SYSTEM_PROMPT;
+  let systemPrompt = getSystemPrompt();
 
   // proactive memory retrieval
   if (config.ai.supermemoryApiKey && slackUserId) {
@@ -83,7 +92,18 @@ export async function runAgent(
     }
   }
 
-  const fullPrompt = context ? `${context}\n\nUser message: ${prompt}` : prompt;
+  // resolve slack user IDs to names in context
+  let resolvedContext = context;
+  if (resolvedContext) {
+    for (const [id, name] of Object.entries(ALLOWED_USERS)) {
+      resolvedContext = resolvedContext.replaceAll(`<@${id}>`, name);
+    }
+  }
+
+  const senderLabel = senderName ? `Message from ${senderName}:` : "User message:";
+  const fullPrompt = resolvedContext
+    ? `${resolvedContext}\n\n${senderLabel} ${prompt}`
+    : `${senderLabel} ${prompt}`;
 
   const result = await generateText({
     model,
