@@ -1,3 +1,4 @@
+(globalThis as any).AI_SDK_LOG_WARNINGS = false;
 import { App } from "@slack/bolt";
 import cron from "node-cron";
 import { config } from "./config.js";

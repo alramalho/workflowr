@@ -107,26 +107,23 @@ export function registerActions(app: App) {
     // always reply inside a thread
     const replyTs = threadTs ?? message.ts;
 
-    if (!isReply) {
-      try {
-        await client.chat.postEphemeral({
-          channel: channel.id,
-          user: user.id,
-          thread_ts: replyTs,
-          text: "_⏳ translating..._",
-        });
-      } catch {
-        // channel not accessible — fall through, DM will handle errors below
-      }
+    try {
+      await client.chat.postEphemeral({
+        channel: channel.id,
+        user: user.id,
+        thread_ts: replyTs,
+        text: "_⏳ translating..._",
+      });
+    } catch {
+      // channel not accessible — fall through, DM will handle errors below
     }
 
     try {
       const msgFiles = (message as any).files as any[] | undefined;
-      const imgTags = msgFiles?.filter((f: any) => f.mimetype?.startsWith("image/")).map(() => "[image]").join(" ") ?? "";
-      const msgText = ((message as any).text ?? "") + (imgTags ? "\n" + imgTags : "");
+      const msgText = (message as any).text ?? "";
 
       const result = isReply
-        ? await translateMessage(app, channel.id, message.ts, msgText, (message as any).user, teamDomain)
+        ? await translateMessage(app, channel.id, message.ts, msgText, (message as any).user, teamDomain, msgFiles)
         : await translateThread(app, channel.id, message.ts, teamDomain, user.id);
 
       await client.chat.postEphemeral({

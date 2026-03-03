@@ -2,6 +2,8 @@ import type { App } from "@slack/bolt";
 
 export const WRITABLE_CHANNELS: Record<string, string> = {
   ai: "C09SRBNHLF5",
+  development: "C071Z253VE1",
+  "ai-test": "C0AHKQ7U48K",
 };
 
 export async function isChannelWritable(app: App, channelId: string): Promise<boolean> {
