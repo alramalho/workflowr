@@ -8,6 +8,7 @@ export const ALLOWED_USERS: Record<string, string> = {
   "U09SF8QLZBP": "Vaibhav",
   "U0ACFP1UT2N": "Leandro",
   "U08BFN2670W": "Ergin",
+  "U08L16TEDRR": "Melody",
 };
 
 let botUserId: string | undefined;

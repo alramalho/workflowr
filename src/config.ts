@@ -32,5 +32,5 @@ export const config = {
   linear: {
     apiKey: optionalEnv("LINEAR_API_KEY"),
   },
-  oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3000", 10),
+  oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3847", 10),
 };
