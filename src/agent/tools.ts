@@ -14,8 +14,9 @@ import {
 } from "../integrations/slack.js";
 import * as sm from "../integrations/supermemory.js";
 import { config } from "../config.js";
+import { hasExplicitConfirmation } from "./index.js";
 
-export function createTools(app: App, slackUserId?: string, teamId?: string) {
+export function createTools(app: App, slackUserId?: string, teamId?: string, conversationHistory?: string) {
   return {
     // Linear tools
     linear_search_issues: tool({
@@ -224,6 +225,52 @@ export function createTools(app: App, slackUserId?: string, teamId?: string) {
             }),
             execute: async ({ query, daysBack, daysForward }) =>
               googleCal.searchEvents(slackUserId, { query, daysBack, daysForward }),
+          }),
+          google_create_event: tool({
+            description:
+              "Create a Google Calendar event. Use to schedule meetings, reminders, or block time.",
+            inputSchema: z.object({
+              summary: z.string().describe("Event title"),
+              startTime: z.string().describe("Start time in ISO 8601 format (e.g. 2026-03-05T10:00:00+01:00)"),
+              endTime: z.string().describe("End time in ISO 8601 format"),
+              description: z.string().optional().describe("Event description/notes"),
+              attendees: z.array(z.string()).optional().describe("List of attendee email addresses"),
+            }),
+            execute: async ({ summary, startTime, endTime, description, attendees }) =>
+              googleCal.createEvent(slackUserId, { summary, startTime, endTime, description, attendees }),
+          }),
+          google_update_event: tool({
+            description:
+              "Update an existing Google Calendar event. Use google_search_events first to find the event ID.",
+            inputSchema: z.object({
+              eventId: z.string().describe("The event ID to update"),
+              summary: z.string().optional().describe("New event title"),
+              startTime: z.string().optional().describe("New start time in ISO 8601 format"),
+              endTime: z.string().optional().describe("New end time in ISO 8601 format"),
+              description: z.string().optional().describe("New event description"),
+              attendees: z.array(z.string()).optional().describe("New list of attendee emails (replaces existing)"),
+            }),
+            execute: async ({ eventId, ...fields }) => {
+              if (conversationHistory) {
+                const gate = await hasExplicitConfirmation(conversationHistory, `Update calendar event ${eventId}: ${JSON.stringify(fields)}`);
+                if (!gate.confirmed) return { error: `Operation blocked: user did not provide explicit confirmation. ${gate.reason}. Ask the user to confirm before retrying.` };
+              }
+              return googleCal.updateEvent(slackUserId, { eventId, ...fields });
+            },
+          }),
+          google_delete_event: tool({
+            description:
+              "Delete a Google Calendar event. Use google_search_events first to find the event ID.",
+            inputSchema: z.object({
+              eventId: z.string().describe("The event ID to delete"),
+            }),
+            execute: async ({ eventId }) => {
+              if (conversationHistory) {
+                const gate = await hasExplicitConfirmation(conversationHistory, `Delete calendar event ${eventId}`);
+                if (!gate.confirmed) return { error: `Operation blocked: user did not provide explicit confirmation. ${gate.reason}. Ask the user to confirm before retrying.` };
+              }
+              return googleCal.deleteEvent(slackUserId, { eventId });
+            },
           }),
           google_get_meeting_notes: tool({
             description:

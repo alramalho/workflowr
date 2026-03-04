@@ -47,7 +47,23 @@ export function registerEvents(app: App) {
 
     if (!isMentioned && !isActiveThread && !isDM) return;
 
-    const userMessage = message.text.replace(`<@${userId}>`, "").trim();
+    let userMessage = message.text.replace(`<@${userId}>`, "").trim();
+
+    // extract text from forwarded/quoted messages (attachments)
+    if ("attachments" in message && Array.isArray(message.attachments)) {
+      const attachmentText = message.attachments
+        .map((a: any) => {
+          const parts: string[] = [];
+          if (a.author_name) parts.push(`${a.author_name}:`);
+          if (a.text) parts.push(a.text);
+          else if (a.fallback) parts.push(a.fallback);
+          return parts.join(" ");
+        })
+        .filter(Boolean)
+        .join("\n");
+      if (attachmentText) userMessage += `\n\n[Attached/quoted message]\n${attachmentText}`;
+    }
+
     if (!userMessage) return;
 
     const channel = message.channel;

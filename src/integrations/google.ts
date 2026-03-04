@@ -72,6 +72,91 @@ export async function searchEvents(
   }));
 }
 
+export async function createEvent(
+  slackUserId: string,
+  opts: {
+    summary: string;
+    startTime: string;
+    endTime: string;
+    description?: string;
+    attendees?: string[];
+    calendarId?: string;
+  }
+) {
+  const { summary, startTime, endTime, description, attendees, calendarId = "primary" } = opts;
+  const auth = getAuthClient(slackUserId);
+  const calendar = google.calendar({ version: "v3", auth });
+
+  const { data } = await calendar.events.insert({
+    calendarId,
+    requestBody: {
+      summary,
+      description,
+      start: { dateTime: startTime },
+      end: { dateTime: endTime },
+      attendees: attendees?.map((email) => ({ email })),
+    },
+  });
+
+  return {
+    id: data.id,
+    summary: data.summary,
+    start: data.start?.dateTime,
+    end: data.end?.dateTime,
+    htmlLink: data.htmlLink,
+  };
+}
+
+export async function updateEvent(
+  slackUserId: string,
+  opts: {
+    eventId: string;
+    summary?: string;
+    startTime?: string;
+    endTime?: string;
+    description?: string;
+    attendees?: string[];
+    calendarId?: string;
+  }
+) {
+  const { eventId, summary, startTime, endTime, description, attendees, calendarId = "primary" } = opts;
+  const auth = getAuthClient(slackUserId);
+  const calendar = google.calendar({ version: "v3", auth });
+
+  const requestBody: Record<string, any> = {};
+  if (summary !== undefined) requestBody.summary = summary;
+  if (description !== undefined) requestBody.description = description;
+  if (startTime !== undefined) requestBody.start = { dateTime: startTime };
+  if (endTime !== undefined) requestBody.end = { dateTime: endTime };
+  if (attendees !== undefined) requestBody.attendees = attendees.map((email) => ({ email }));
+
+  const { data } = await calendar.events.patch({
+    calendarId,
+    eventId,
+    requestBody,
+  });
+
+  return {
+    id: data.id,
+    summary: data.summary,
+    start: data.start?.dateTime,
+    end: data.end?.dateTime,
+    htmlLink: data.htmlLink,
+  };
+}
+
+export async function deleteEvent(
+  slackUserId: string,
+  opts: { eventId: string; calendarId?: string }
+) {
+  const { eventId, calendarId = "primary" } = opts;
+  const auth = getAuthClient(slackUserId);
+  const calendar = google.calendar({ version: "v3", auth });
+
+  await calendar.events.delete({ calendarId, eventId });
+  return { deleted: true };
+}
+
 export async function getEventNotes(
   slackUserId: string,
   opts: { query?: string; daysBack?: number; calendarId?: string } = {}
