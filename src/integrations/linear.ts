@@ -62,6 +62,40 @@ export async function updateIssue(
     : null;
 }
 
+export async function listIssues(filters: {
+  assigneeName?: string;
+  teamId?: string;
+  stateId?: string;
+  stateName?: string;
+  limit?: number;
+}) {
+  const filter: Record<string, unknown> = {};
+  if (filters.assigneeName) filter.assignee = { name: { containsIgnoreCase: filters.assigneeName } };
+  if (filters.teamId) filter.team = { id: { eq: filters.teamId } };
+  if (filters.stateId) filter.state = { id: { eq: filters.stateId } };
+  else if (filters.stateName) filter.state = { name: { containsIgnoreCase: filters.stateName } };
+
+  const results = await client.issues({ filter, first: filters.limit ?? 20 });
+  const issues = [];
+  for (const issue of results.nodes) {
+    const assignee = await issue.assignee;
+    const state = await issue.state;
+    issues.push({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      priority: issue.priority,
+      url: issue.url,
+      assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+      state: state ? { id: state.id, name: state.name } : null,
+      slaBreachesAt: issue.slaBreachesAt ?? null,
+      slaStartedAt: issue.slaStartedAt ?? null,
+      slaType: issue.slaType ?? null,
+    });
+  }
+  return issues;
+}
+
 export async function addComment(issueId: string, body: string) {
   const result = await client.createComment({ issueId, body });
   const comment = await result.comment;

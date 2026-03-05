@@ -29,6 +29,17 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       inputSchema: z.object({ issueId: z.string() }),
       execute: async ({ issueId }) => linear.getIssue(issueId),
     }),
+    linear_list_issues: tool({
+      description: "List Linear issues with filters (assignee, team, state). Use this instead of search when filtering by structured fields.",
+      inputSchema: z.object({
+        assigneeName: z.string().optional().describe("Filter by assignee display name"),
+        teamId: z.string().optional().describe("Filter by team ID"),
+        stateId: z.string().optional().describe("Filter by workflow state ID"),
+        stateName: z.string().optional().describe("Filter by state name (e.g. 'In Progress', 'Done')"),
+        limit: z.number().optional().describe("Max results to return (default 20)"),
+      }),
+      execute: async (filters) => linear.listIssues(filters),
+    }),
     linear_create_issue: tool({
       description: "Create a new Linear issue",
       inputSchema: z.object({
