@@ -9,7 +9,7 @@ import { getThreadReplies } from "./slack.js";
 // per-user, per-thread: ts of last translated message
 const translationHistory = new Map<string, string>();
 
-async function downloadSlackImage(url: string): Promise<Buffer> {
+export async function downloadSlackImage(url: string): Promise<Buffer> {
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${config.slack.botToken}` },
     redirect: "manual",
@@ -64,7 +64,7 @@ async function describeImage(url: string, mimetype: string): Promise<string | nu
   }
 }
 
-const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 async function processImageFiles(files: any[]): Promise<string> {
   const imgs = files?.filter((f: any) => f.mimetype?.startsWith("image/")) ?? [];

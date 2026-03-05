@@ -33,6 +33,25 @@ export async function getRecentCommits(
   return data;
 }
 
+export async function createPR(
+  owner: string,
+  repo: string,
+  title: string,
+  head: string,
+  base: string,
+  body?: string,
+) {
+  const { data } = await octokit.rest.pulls.create({
+    owner,
+    repo,
+    title,
+    head,
+    base,
+    body,
+  });
+  return data;
+}
+
 export async function getRepoActivity(owner: string, repo: string) {
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [prs, commits] = await Promise.all([

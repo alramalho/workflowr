@@ -106,6 +106,7 @@ export async function runAgent(
   slackUserId?: string,
   teamId?: string,
   senderName?: string,
+  images?: { data: Buffer; mimeType: string }[],
 ) {
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone(config.ai.model);
@@ -146,10 +147,19 @@ export async function runAgent(
     ? `${resolvedContext}\n\n${senderLabel} ${prompt}`
     : `${senderLabel} ${prompt}`;
 
+  const userContent: Array<{ type: "text"; text: string } | { type: "image"; image: Buffer; mimeType: string }> = [
+    { type: "text", text: fullPrompt },
+  ];
+  if (images?.length) {
+    for (const img of images) {
+      userContent.push({ type: "image", image: img.data, mimeType: img.mimeType });
+    }
+  }
+
   const result = await generateText({
     model,
     system: systemPrompt,
-    prompt: fullPrompt,
+    messages: [{ role: "user", content: userContent }],
     tools,
     stopWhen: stepCountIs(15),
   });

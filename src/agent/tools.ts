@@ -151,6 +151,29 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       },
     }),
 
+    github_create_pr: tool({
+      description: "Create a pull request on a GitHub repo",
+      inputSchema: z.object({
+        owner: z.string(),
+        repo: z.string(),
+        title: z.string().describe("PR title"),
+        head: z.string().describe("Branch to merge from"),
+        base: z.string().describe("Branch to merge into (e.g. main)"),
+        body: z.string().optional().describe("PR description/body"),
+      }),
+      execute: async ({ owner, repo, title, head, base, body }) => {
+        const pr = await github.createPR(owner, repo, title, head, base, body);
+        return {
+          number: pr.number,
+          title: pr.title,
+          url: pr.html_url,
+          state: pr.state,
+          head: pr.head.ref,
+          base: pr.base.ref,
+        };
+      },
+    }),
+
     // Slack tools
     slack_get_channel_history: tool({
       description: "Read recent messages from a Slack channel",

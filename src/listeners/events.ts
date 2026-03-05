@@ -1,6 +1,7 @@
 import type { App } from "@slack/bolt";
 import { runAgent, shouldRespond } from "../agent/index.js";
 import { getThreadReplies, getChannelHistory, isChannelWritable, WRITABLE_CHANNELS } from "../integrations/slack.js";
+import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
 
 export const ALLOWED_USERS: Record<string, string> = {
   "U08PH00GP9Q": "Alex",
@@ -25,10 +26,14 @@ async function getBotUserId(app: App): Promise<string> {
 export function registerEvents(app: App) {
   app.message(async ({ message, say }) => {
     if (message.subtype) return;
-    if (!("text" in message) || !message.text) return;
+    const hasFiles = "files" in message && Array.isArray((message as any).files) && (message as any).files.length > 0;
+    if (!("text" in message) || !message.text) {
+      if (!hasFiles) return;
+    }
     if (!("user" in message)) return;
     if (!(message.user as string in ALLOWED_USERS)) {
-      const isMentioned = message.text.includes(`<@${await getBotUserId(app)}>`);
+      const text = ("text" in message && message.text) || "";
+      const isMentioned = text.includes(`<@${await getBotUserId(app)}>`);
       if (isMentioned) {
         await app.client.chat.postEphemeral({
           channel: message.channel,
@@ -41,13 +46,14 @@ export function registerEvents(app: App) {
 
     const userId = await getBotUserId(app);
     const isDM = "channel_type" in message && message.channel_type === "im";
-    const isMentioned = message.text.includes(`<@${userId}>`);
+    const messageText = ("text" in message && message.text) ? message.text : "";
+    const isMentioned = messageText.includes(`<@${userId}>`);
     const threadTs = "thread_ts" in message ? message.thread_ts : undefined;
     const isActiveThread = threadTs && activeThreads.has(threadTs);
 
     if (!isMentioned && !isActiveThread && !isDM) return;
 
-    let userMessage = message.text.replace(`<@${userId}>`, "").trim();
+    let userMessage = messageText.replace(`<@${userId}>`, "").trim();
 
     // extract text from forwarded/quoted messages (attachments)
     if ("attachments" in message && Array.isArray(message.attachments)) {
@@ -64,7 +70,25 @@ export function registerEvents(app: App) {
       if (attachmentText) userMessage += `\n\n[Attached/quoted message]\n${attachmentText}`;
     }
 
-    if (!userMessage) return;
+    // download images from message files
+    const images: { data: Buffer; mimeType: string }[] = [];
+    if ("files" in message && Array.isArray(message.files)) {
+      const imgFiles = message.files.filter((f: any) => SUPPORTED_IMAGE_TYPES.has(f.mimetype));
+      const downloaded = await Promise.all(
+        imgFiles.map(async (f: any) => {
+          try {
+            const data = await downloadSlackImage(f.url_private);
+            return { data, mimeType: f.mimetype as string };
+          } catch (e) {
+            console.error("Failed to download image:", e);
+            return null;
+          }
+        }),
+      );
+      images.push(...downloaded.filter((d): d is NonNullable<typeof d> => d !== null));
+    }
+
+    if (!userMessage && !images.length) return;
 
     const channel = message.channel;
 
@@ -117,7 +141,7 @@ export function registerEvents(app: App) {
     try {
       const teamId = "team" in message ? (message.team as string | undefined) : undefined;
       const senderName = ALLOWED_USERS[message.user as string];
-      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName);
+      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined);
       await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts });
       await say({ text: response || "I couldn't generate a response.", thread_ts: replyTs });
     } catch (error) {
