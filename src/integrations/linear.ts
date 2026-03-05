@@ -67,6 +67,7 @@ export async function listIssues(filters: {
   teamId?: string;
   stateId?: string;
   stateName?: string;
+  updatedBefore?: string;
   limit?: number;
 }) {
   const filter: Record<string, unknown> = {};
@@ -74,6 +75,7 @@ export async function listIssues(filters: {
   if (filters.teamId) filter.team = { id: { eq: filters.teamId } };
   if (filters.stateId) filter.state = { id: { eq: filters.stateId } };
   else if (filters.stateName) filter.state = { name: { containsIgnoreCase: filters.stateName } };
+  if (filters.updatedBefore) filter.updatedAt = { lt: new Date(filters.updatedBefore) };
 
   const results = await client.issues({ filter, first: filters.limit ?? 20 });
   const issues = [];
@@ -119,4 +121,32 @@ export async function getWorkflowStates(teamId: string) {
     name: state.name,
     type: state.type,
   }));
+}
+
+export async function listStaleIssues(staleDays = 15, limit = 50) {
+  const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
+  const results = await client.issues({
+    filter: {
+      updatedAt: { lt: cutoff },
+      state: { type: { nin: ["completed", "canceled"] } },
+    },
+    first: limit,
+  });
+
+  const issues = [];
+  for (const issue of results.nodes) {
+    const assignee = await issue.assignee;
+    const state = await issue.state;
+    issues.push({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      priority: issue.priority,
+      url: issue.url,
+      updatedAt: issue.updatedAt,
+      assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+      state: state ? { id: state.id, name: state.name } : null,
+    });
+  }
+  return issues;
 }

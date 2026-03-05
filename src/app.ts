@@ -9,6 +9,8 @@ import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { startMeetingWatcher } from "./jobs/meeting-watcher.js";
 import { startJobRunner } from "./jobs/job-runner.js";
 import { setupLinearDoneNudge } from "./jobs/linear-done-nudge.js";
+import { setupOrgAwareness } from "./jobs/org-awareness.js";
+import { setupStaleIssuesReporter } from "./jobs/linear-stale-issues.js";
 import { startOAuthServer } from "./oauth-server.js";
 
 const app = new App({
@@ -22,6 +24,8 @@ registerCommands(app);
 registerEvents(app);
 registerActions(app);
 setupLinearDoneNudge(app);
+setupOrgAwareness(app);
+setupStaleIssuesReporter(app);
 
 // --- Config ---
 

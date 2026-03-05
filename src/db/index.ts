@@ -40,6 +40,41 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS org_members (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    slack_id     TEXT NOT NULL UNIQUE,
+    team_id      TEXT,
+    name         TEXT NOT NULL,
+    reports_to   TEXT,
+    role         TEXT,
+    writing_style TEXT,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS thread_reads (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id   TEXT NOT NULL,
+    thread_ts    TEXT NOT NULL,
+    last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(channel_id, thread_ts)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS issue_thread_links (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_identifier TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    thread_ts        TEXT NOT NULL,
+    resolved         INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(issue_identifier, channel_id, thread_ts)
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS delayed_jobs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     type       TEXT NOT NULL,

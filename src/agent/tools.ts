@@ -30,12 +30,13 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       execute: async ({ issueId }) => linear.getIssue(issueId),
     }),
     linear_list_issues: tool({
-      description: "List Linear issues with filters (assignee, team, state). Use this instead of search when filtering by structured fields.",
+      description: "List Linear issues with filters (assignee, team, state, activity). Use this instead of search when filtering by structured fields.",
       inputSchema: z.object({
         assigneeName: z.string().optional().describe("Filter by assignee display name"),
         teamId: z.string().optional().describe("Filter by team ID"),
         stateId: z.string().optional().describe("Filter by workflow state ID"),
         stateName: z.string().optional().describe("Filter by state name (e.g. 'In Progress', 'Done')"),
+        updatedBefore: z.string().optional().describe("Only issues last updated before this ISO date (e.g. '2026-02-19'). Useful for finding stale/idle issues."),
         limit: z.number().optional().describe("Max results to return (default 20)"),
       }),
       execute: async (filters) => linear.listIssues(filters),
@@ -82,7 +83,6 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       inputSchema: z.object({ teamId: z.string() }),
       execute: async ({ teamId }) => linear.getWorkflowStates(teamId),
     }),
-
     // GitHub tools
     github_get_recent_prs: tool({
       description: "Get recent pull requests for a GitHub repo",

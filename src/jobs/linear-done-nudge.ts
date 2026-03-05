@@ -3,12 +3,17 @@ import { scheduleJob } from "../db/delayed-jobs.js";
 import { registerJobHandler } from "./job-runner.js";
 import { getThreadReplies } from "../integrations/slack.js";
 import { searchIssues, getIssue } from "../integrations/linear.js";
-import { getUserByLinearId } from "../db/users.js";
-import { ALLOWED_USERS } from "../listeners/events.js";
+import {
+  linkIssueToThread,
+  getUnresolvedLinks,
+  markResolved,
+} from "../db/issue-thread-links.js";
+import { ADMIN_USERS } from "../listeners/events.js";
 
 const JOB_TYPE = "linear-done-nudge";
-const DELAY_MS = 60 * 60 * 1000; // 1 hour
-const DONE_PATTERN = /changed status to Done for.*?([A-Z]+-\d+)/i;
+const NUDGE_DELAY_MS = 60 * 60 * 1000; // 1 hour
+const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 min
+const TICKET_PATTERN = /([A-Z]{2,}-\d+)/;
 
 function extractText(message: any): string {
   const parts: string[] = [];
@@ -34,85 +39,101 @@ function isLinearBot(message: any): boolean {
 export function setupLinearDoneNudge(app: App) {
   registerJobHandler(JOB_TYPE, handleNudge);
 
-  // app.event('message') receives ALL messages including bot messages
-  // (unlike app.message() which filters them out)
+  // Capture ALL Linear bot ticket mentions as links (not just "Done")
   app.event("message", async ({ event }) => {
     const msg = event as any;
     if (!msg.bot_id && !msg.bot_profile) return;
     if (!isLinearBot(msg)) return;
 
     const text = extractText(msg);
-    const match = text.match(DONE_PATTERN);
+    const match = text.match(TICKET_PATTERN);
     if (!match) return;
 
     const issueIdentifier = match[1];
     const channel = msg.channel;
     const threadTs = msg.thread_ts ?? msg.ts;
 
-    const key = `${JOB_TYPE}:${channel}:${threadTs}`;
-    const runAt = new Date(Date.now() + DELAY_MS);
-
-    const scheduled = scheduleJob(JOB_TYPE, key, {
-      channel,
-      threadTs,
-      issueIdentifier,
-      triggerTs: msg.ts,
-    }, runAt);
-
-    if (scheduled) {
-      console.log(
-        `Scheduled ${JOB_TYPE} for ${issueIdentifier} in 1h (thread ${threadTs})`,
-      );
+    const linked = linkIssueToThread(issueIdentifier, channel, threadTs);
+    if (linked) {
+      console.log(`Linked ${issueIdentifier} → thread ${threadTs} in <#${channel}>`);
     }
   });
+
+  // Poll linked issues for Done status
+  const interval = setInterval(() => {
+    pollLinkedIssues(app).catch(console.error);
+  }, POLL_INTERVAL_MS);
+
+  // Also poll on startup (after a short delay to let app initialize)
+  setTimeout(() => pollLinkedIssues(app).catch(console.error), 10_000);
+
+  return () => clearInterval(interval);
 }
 
-function resolveSlackUser(
-  assignee: { id: string; name: string },
-): string | null {
-  // 1. Try users table (linear_id -> slack_id)
-  const user = getUserByLinearId(assignee.id);
-  if (user?.slack_id) return user.slack_id;
+async function pollLinkedIssues(app: App) {
+  const links = getUnresolvedLinks();
+  if (!links.length) return;
 
-  // 2. Fallback: match assignee name against ALLOWED_USERS
-  const nameLower = assignee.name.toLowerCase();
-  for (const [slackId, name] of Object.entries(ALLOWED_USERS)) {
-    if (name.toLowerCase() === nameLower) return slackId;
+  for (const link of links) {
+    try {
+      const results = await searchIssues(link.issue_identifier);
+      const found = results[0];
+      if (!found) continue;
+
+      const issue = await getIssue(found.id);
+      if (!issue.state || issue.state.name.toLowerCase() !== "done") continue;
+
+      // Issue is Done — schedule a nudge (dedup by issue identifier)
+      const key = `${JOB_TYPE}:${link.issue_identifier}`;
+      const runAt = new Date(Date.now() + NUDGE_DELAY_MS);
+
+      scheduleJob(JOB_TYPE, key, {
+        channel: link.channel_id,
+        threadTs: link.thread_ts,
+        issueIdentifier: link.issue_identifier,
+        linkId: link.id,
+      }, runAt);
+    } catch (err) {
+      console.error(`Failed to check linked issue ${link.issue_identifier}:`, err);
+    }
   }
-
-  return null;
 }
 
 async function handleNudge(app: App, payload: Record<string, unknown>) {
-  const { channel, threadTs, issueIdentifier, triggerTs } = payload as {
+  const { channel, threadTs, issueIdentifier, linkId } = payload as {
     channel: string;
     threadTs: string;
     issueIdentifier: string;
-    triggerTs: string;
+    linkId: number;
   };
 
   const replies = await getThreadReplies(app, channel, threadTs);
 
+  // Find the most recent Linear bot "Done" message timestamp in this thread
+  const doneMsg = [...replies].reverse().find((msg: any) => {
+    if (!msg.bot_id && !msg.bot_profile) return false;
+    const text = extractText(msg);
+    return /changed status to Done/i.test(text) && text.includes(issueIdentifier);
+  });
+  const doneTs = doneMsg ? parseFloat((doneMsg as any).ts) : 0;
+
   const hasHumanReply = replies.some((msg: any) => {
-    if (parseFloat(msg.ts) <= parseFloat(triggerTs)) return false;
+    if (doneTs > 0 && parseFloat(msg.ts) <= doneTs) return false;
     if (msg.subtype || msg.bot_id) return false;
     return !!msg.user;
   });
 
+  // Mark link as resolved regardless — we've processed it
+  if (linkId) markResolved(linkId);
+
   if (hasHumanReply) {
-    console.log(
-      `${JOB_TYPE}: human replied in thread for ${issueIdentifier}, skipping`,
-    );
+    console.log(`${JOB_TYPE}: human replied for ${issueIdentifier}, skipping`);
     return;
   }
 
-  // Look up issue assignee
   const results = await searchIssues(issueIdentifier);
   const found = results[0];
-  if (!found) {
-    console.log(`${JOB_TYPE}: could not find issue ${issueIdentifier}`);
-    return;
-  }
+  if (!found) return;
 
   const issue = await getIssue(found.id);
   if (!issue.assignee) {
@@ -120,15 +141,6 @@ async function handleNudge(app: App, payload: Record<string, unknown>) {
     return;
   }
 
-  const slackUserId = resolveSlackUser(issue.assignee);
-  if (!slackUserId) {
-    console.log(
-      `${JOB_TYPE}: no Slack user for Linear assignee ${issue.assignee.name}`,
-    );
-    return;
-  }
-
-  // Get thread permalink for the DM
   let threadLink = "";
   try {
     const permalink = await app.client.chat.getPermalink({
@@ -140,10 +152,13 @@ async function handleNudge(app: App, payload: Record<string, unknown>) {
     threadLink = `https://slack.com/archives/${channel}/p${threadTs.replace(".", "")}`;
   }
 
-  await app.client.chat.postMessage({
-    channel: slackUserId,
-    text: `Hey! <${issue.url}|${issueIdentifier}> was marked as Done but nobody followed up in <${threadLink}|the thread>. Was this intentional?`,
-  });
+  const assigneeName = issue.assignee.name;
+  const msg = `Hey! <${issue.url}|${issueIdentifier}> (assigned to ${assigneeName}) was marked as Done but nobody followed up in <${threadLink}|the thread>. Was this intentional?`;
 
-  console.log(`${JOB_TYPE}: nudged ${issue.assignee.name} about ${issueIdentifier}`);
+  // DM admin users only
+  for (const adminId of Object.keys(ADMIN_USERS)) {
+    await app.client.chat.postMessage({ channel: adminId, text: msg });
+  }
+
+  console.log(`${JOB_TYPE}: nudged admins about ${issueIdentifier} (${assigneeName})`);
 }
