@@ -37,13 +37,15 @@ export async function createIssue(
   teamId: string,
   title: string,
   description?: string,
-  priority?: number
+  priority?: number,
+  assigneeId?: string,
 ) {
   const result = await client.createIssue({
     teamId,
     title,
     description,
     priority,
+    assigneeId,
   });
   const issue = await result.issue;
   return issue
@@ -120,6 +122,16 @@ export async function getWorkflowStates(teamId: string) {
     id: state.id,
     name: state.name,
     type: state.type,
+  }));
+}
+
+export async function listMembers() {
+  const users = await client.users();
+  return users.nodes.map((u) => ({
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    active: u.active,
   }));
 }
 

@@ -7,6 +7,7 @@ import { config } from "../config.js";
 import { createTools } from "./tools.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
+import { getAllOrgMembers, type OrgMember } from "../db/org-members.js";
 
 function getSystemPrompt() {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -132,6 +133,24 @@ export async function runAgent(
     } catch (e) {
       console.error("Memory retrieval failed:", e);
     }
+  }
+
+  // inject org awareness context
+  const orgMembers = getAllOrgMembers(teamId);
+  if (orgMembers.length > 0) {
+    const orgLines = orgMembers.map((m) => {
+      const parts = [`${m.name} (${m.slack_id})`];
+      if (m.linear_id) parts.push(`linearId: ${m.linear_id}`);
+      if (m.role) parts.push(`role: ${m.role}`);
+      if (m.reports_to) {
+        const manager = orgMembers.find((o) => o.slack_id === m.reports_to);
+        parts.push(`reports to: ${manager?.name ?? m.reports_to}`);
+      }
+      if (m.writing_style) parts.push(`style: ${m.writing_style}`);
+      if (m.representative_example_message) parts.push(`example msg: "${m.representative_example_message}"`);
+      return `• ${parts.join(" | ")}`;
+    });
+    systemPrompt += `\n\nOrg context (auto-built from observing threads):\n${orgLines.join("\n")}`;
   }
 
   // resolve slack user IDs to names in context

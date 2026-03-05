@@ -45,12 +45,23 @@ db.exec(`
     slack_id     TEXT NOT NULL UNIQUE,
     team_id      TEXT,
     name         TEXT NOT NULL,
+    linear_id    TEXT,
     reports_to   TEXT,
     role         TEXT,
     writing_style TEXT,
+    representative_example_message TEXT,
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
+
+// migrate: add representative_example_message to existing org_members tables
+const orgCols = db.prepare(`PRAGMA table_info(org_members)`).all() as Array<{ name: string }>;
+if (!orgCols.some((c) => c.name === "representative_example_message")) {
+  db.exec(`ALTER TABLE org_members ADD COLUMN representative_example_message TEXT`);
+}
+if (!orgCols.some((c) => c.name === "linear_id")) {
+  db.exec(`ALTER TABLE org_members ADD COLUMN linear_id TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS thread_reads (

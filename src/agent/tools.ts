@@ -15,6 +15,7 @@ import {
 import * as sm from "../integrations/supermemory.js";
 import { config } from "../config.js";
 import { hasExplicitConfirmation } from "./index.js";
+import { getAllOrgMembers, updateOrgMember } from "../db/org-members.js";
 
 export function createTools(app: App, slackUserId?: string, teamId?: string, conversationHistory?: string) {
   return {
@@ -42,15 +43,16 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       execute: async (filters) => linear.listIssues(filters),
     }),
     linear_create_issue: tool({
-      description: "Create a new Linear issue",
+      description: "Create a new Linear issue. Use linear_list_members to resolve assigneeId from a person's name.",
       inputSchema: z.object({
         teamId: z.string(),
         title: z.string(),
         description: z.string().optional(),
         priority: z.number().min(0).max(4).optional(),
+        assigneeId: z.string().optional().describe("Linear user ID to assign the issue to"),
       }),
-      execute: async ({ teamId, title, description, priority }) =>
-        linear.createIssue(teamId, title, description, priority),
+      execute: async ({ teamId, title, description, priority, assigneeId }) =>
+        linear.createIssue(teamId, title, description, priority, assigneeId),
     }),
     linear_update_issue: tool({
       description: "Update fields on a Linear issue",
@@ -82,6 +84,36 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       description: "Get available workflow statuses for a Linear team",
       inputSchema: z.object({ teamId: z.string() }),
       execute: async ({ teamId }) => linear.getWorkflowStates(teamId),
+    }),
+    linear_list_members: tool({
+      description: "List Linear workspace members. Also syncs Linear IDs to org members by matching emails with Slack profiles.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const members = await linear.listMembers();
+        // sync linear IDs to org_members by email match
+        try {
+          const orgMembers = getAllOrgMembers(teamId);
+          const needsSync = orgMembers.filter((m) => !m.linear_id);
+          if (needsSync.length > 0) {
+            const slackEmails = new Map<string, string>();
+            for (const m of needsSync) {
+              try {
+                const info = await app.client.users.info({ user: m.slack_id });
+                const email = info.user?.profile?.email;
+                if (email) slackEmails.set(email.toLowerCase(), m.slack_id);
+              } catch {}
+            }
+            for (const lm of members) {
+              if (!lm.email) continue;
+              const slackId = slackEmails.get(lm.email.toLowerCase());
+              if (slackId) updateOrgMember(slackId, { linearId: lm.id });
+            }
+          }
+        } catch (e) {
+          console.error("Linear→Slack email sync failed:", e);
+        }
+        return members;
+      },
     }),
     // GitHub tools
     github_get_recent_prs: tool({
