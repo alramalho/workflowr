@@ -7,6 +7,8 @@ import { registerEvents } from "./listeners/events.js";
 import { registerActions } from "./listeners/actions.js";
 import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { startMeetingWatcher } from "./jobs/meeting-watcher.js";
+import { startJobRunner } from "./jobs/job-runner.js";
+import { setupLinearDoneNudge } from "./jobs/linear-done-nudge.js";
 import { startOAuthServer } from "./oauth-server.js";
 
 const app = new App({
@@ -19,6 +21,7 @@ const app = new App({
 registerCommands(app);
 registerEvents(app);
 registerActions(app);
+setupLinearDoneNudge(app);
 
 // --- Config ---
 
@@ -41,5 +44,6 @@ const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
   await app.start();
   console.log("Slack bot is running");
 
+  startJobRunner(app);
   startOAuthServer(config.oauthPort, { slackApp: app, channel: AI_CHANNEL, repos: REPOS });
 })();
