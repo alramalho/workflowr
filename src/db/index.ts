@@ -86,6 +86,36 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS org_guidelines (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id  TEXT,
+    key      TEXT NOT NULL,
+    value    TEXT NOT NULL,
+    UNIQUE(key, team_id)
+  )
+`);
+
+// seed default ticket creation guidelines
+const hasTicketGuidelines = db.prepare(`SELECT 1 FROM org_guidelines WHERE key = 'ticket_creation'`).get();
+if (!hasTicketGuidelines) {
+  db.prepare(`INSERT INTO org_guidelines (team_id, key, value) VALUES (NULL, 'ticket_creation', ?)`).run(
+    [
+      "When creating Linear tickets, follow these rules:",
+      "• Always create tickets in English, even if the original conversation is in another language (e.g. German).",
+      "• Always assign the person who asked to create the ticket as the assignee. Use linear_list_members to resolve their Linear ID if needed.",
+      "• For AI-related issues (hallucination, wrong information, bad tone, wrong recommendations):",
+      '  - Add the "AI Debug" label.',
+      '  - Add to the "AI (Achieve SOTA)" project.',
+      "  - In the description, explain what went wrong and what the expected outcome should have been.",
+      "  - Include the original message in italic as a quote, plus a translated English version if it's not in English. Example:",
+      "    _Die KI hätte das Produkt XScreen nicht empfehlen sollen._",
+      "    (The AI should have not recommended the product XScreen)",
+      '  - If the issue is about something "not working" (functional bug), also add the "Bug" label.',
+    ].join("\n"),
+  );
+}
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS delayed_jobs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     type       TEXT NOT NULL,

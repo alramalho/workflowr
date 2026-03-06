@@ -39,6 +39,8 @@ export async function createIssue(
   description?: string,
   priority?: number,
   assigneeId?: string,
+  labelIds?: string[],
+  projectId?: string,
 ) {
   const result = await client.createIssue({
     teamId,
@@ -46,11 +48,37 @@ export async function createIssue(
     description,
     priority,
     assigneeId,
+    labelIds,
+    projectId,
   });
   const issue = await result.issue;
   return issue
     ? { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url }
     : null;
+}
+
+export async function listLabels(teamId?: string) {
+  const labels = await client.issueLabels({ first: 100 });
+  const all = labels.nodes.map((l) => ({ id: l.id, name: l.name }));
+  if (!teamId) return all;
+  // workspace-level labels don't have a team, so include those + team-specific
+  const teamLabels = await Promise.all(
+    labels.nodes.map(async (l) => {
+      const team = await l.team;
+      return { id: l.id, name: l.name, teamId: team?.id ?? null };
+    }),
+  );
+  return teamLabels.filter((l) => !l.teamId || l.teamId === teamId);
+}
+
+export async function listProjects() {
+  const projects = await client.projects({ first: 50 });
+  return projects.nodes.map((p) => ({ id: p.id, name: p.name }));
+}
+
+export async function attachSlackThread(issueId: string, slackThreadUrl: string) {
+  const result = await client.attachmentLinkSlack(issueId, slackThreadUrl);
+  return { success: result.success };
 }
 
 export async function updateIssue(

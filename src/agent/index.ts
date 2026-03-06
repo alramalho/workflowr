@@ -8,6 +8,7 @@ import { createTools } from "./tools.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { getAllOrgMembers, type OrgMember } from "../db/org-members.js";
+import { getGuidelines } from "../db/org-guidelines.js";
 
 function getSystemPrompt() {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -108,10 +109,12 @@ export async function runAgent(
   teamId?: string,
   senderName?: string,
   images?: { data: Buffer; mimeType: string }[],
+  channelId?: string,
+  threadTs?: string,
 ) {
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone(config.ai.model);
-  const tools = createTools(app, slackUserId, teamId, context);
+  const tools = createTools(app, slackUserId, teamId, context, channelId, threadTs);
 
   let systemPrompt = getSystemPrompt();
 
@@ -151,6 +154,13 @@ export async function runAgent(
       return `• ${parts.join(" | ")}`;
     });
     systemPrompt += `\n\nOrg context (auto-built from observing threads):\n${orgLines.join("\n")}`;
+  }
+
+  // inject org guidelines
+  const guidelines = getGuidelines(teamId);
+  if (guidelines.length > 0) {
+    const guidelineText = guidelines.map((g) => g.value).join("\n\n");
+    systemPrompt += `\n\nOrg guidelines:\n${guidelineText}`;
   }
 
   // resolve slack user IDs to names in context

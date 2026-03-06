@@ -17,7 +17,7 @@ import { config } from "../config.js";
 import { hasExplicitConfirmation } from "./index.js";
 import { getAllOrgMembers, updateOrgMember } from "../db/org-members.js";
 
-export function createTools(app: App, slackUserId?: string, teamId?: string, conversationHistory?: string) {
+export function createTools(app: App, slackUserId?: string, teamId?: string, conversationHistory?: string, channelId?: string, threadTs?: string) {
   return {
     // Linear tools
     linear_search_issues: tool({
@@ -43,16 +43,46 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
       execute: async (filters) => linear.listIssues(filters),
     }),
     linear_create_issue: tool({
-      description: "Create a new Linear issue. Use linear_list_members to resolve assigneeId from a person's name.",
+      description: "Create a new Linear issue. Use linear_list_members to resolve assigneeId. Use linear_list_labels / linear_list_projects to resolve label/project IDs. Automatically syncs the current Slack thread to the issue.",
       inputSchema: z.object({
         teamId: z.string(),
         title: z.string(),
         description: z.string().optional(),
         priority: z.number().min(0).max(4).optional(),
         assigneeId: z.string().optional().describe("Linear user ID to assign the issue to"),
+        labelIds: z.array(z.string()).optional().describe("Label IDs to apply"),
+        projectId: z.string().optional().describe("Project ID to add the issue to"),
       }),
-      execute: async ({ teamId, title, description, priority, assigneeId }) =>
-        linear.createIssue(teamId, title, description, priority, assigneeId),
+      execute: async ({ teamId, title, description, priority, assigneeId, labelIds, projectId }) => {
+        const issue = await linear.createIssue(teamId, title, description, priority, assigneeId, labelIds, projectId);
+        if (issue && channelId && threadTs) {
+          try {
+            let threadUrl: string;
+            try {
+              const permalink = await app.client.chat.getPermalink({ channel: channelId, message_ts: threadTs });
+              threadUrl = permalink.permalink!;
+            } catch {
+              threadUrl = `https://slack.com/archives/${channelId}/p${threadTs.replace(".", "")}`;
+            }
+            await linear.attachSlackThread(issue.id, threadUrl);
+          } catch (e) {
+            console.error("Failed to link Slack thread to Linear issue:", e);
+          }
+        }
+        return issue;
+      },
+    }),
+    linear_list_labels: tool({
+      description: "List available Linear issue labels (optionally filtered by team)",
+      inputSchema: z.object({
+        teamId: z.string().optional(),
+      }),
+      execute: async ({ teamId }) => linear.listLabels(teamId),
+    }),
+    linear_list_projects: tool({
+      description: "List available Linear projects",
+      inputSchema: z.object({}),
+      execute: async () => linear.listProjects(),
     }),
     linear_update_issue: tool({
       description: "Update fields on a Linear issue",
