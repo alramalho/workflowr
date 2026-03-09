@@ -2,7 +2,7 @@ import type { App } from "@slack/bolt";
 import cron from "node-cron";
 import { listStaleIssues } from "../integrations/linear.js";
 import { getUserByLinearId } from "../db/users.js";
-import { ALLOWED_USERS, ADMIN_USERS } from "../listeners/events.js";
+import { ALLOWED_USERS } from "../listeners/events.js";
 
 const STALE_DAYS = 15;
 
@@ -43,28 +43,8 @@ export async function sendStaleIssueDigests(app: App) {
     byAssignee.set(slackId, list);
   }
 
-  // Also send a full digest to admin users
-  const adminDigest = issues
-    .map((i) => {
-      const daysSince = Math.floor(
-        (Date.now() - new Date(i.updatedAt).getTime()) / (1000 * 60 * 60 * 24),
-      );
-      const assigneeName = i.assignee?.name ?? "Unassigned";
-      return `• <${i.url}|${i.identifier}> ${i.title} — *${assigneeName}* (${daysSince}d idle)`;
-    })
-    .join("\n");
-
-  for (const adminId of Object.keys(ADMIN_USERS)) {
-    await app.client.chat.postMessage({
-      channel: adminId,
-      text: `*Stale issues (>${STALE_DAYS} days without activity):*\n${adminDigest}`,
-    });
-  }
-
-  // DM each assignee their own stale issues (skip if they're already an admin — they got the full digest)
+  // DM each assignee their own stale issues
   for (const [slackId, assigneeIssues] of byAssignee) {
-    if (slackId in ADMIN_USERS) continue;
-
     const lines = assigneeIssues
       .map((i) => {
         const daysSince = Math.floor(

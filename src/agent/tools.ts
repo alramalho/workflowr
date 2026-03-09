@@ -10,6 +10,7 @@ import {
   createCanvas,
   createChannelCanvas,
   editCanvas,
+  listChannelCanvases,
   lookupCanvasSections,
 } from "../integrations/slack.js";
 import * as sm from "../integrations/supermemory.js";
@@ -257,6 +258,14 @@ export function createTools(app: App, slackUserId?: string, teamId?: string, con
     }),
 
     // Slack canvas tools
+    slack_list_channel_canvases: tool({
+      description: "List canvases (tabs) attached to a Slack channel. Returns canvas IDs and titles. Use this to find a canvas before looking up its sections or editing it.",
+      inputSchema: z.object({
+        channel: z.string().describe("Channel ID"),
+      }),
+      execute: async ({ channel }) =>
+        listChannelCanvases(app, channel),
+    }),
     slack_create_canvas: tool({
       description: "Create a standalone Slack canvas. Content uses standard markdown: ## headings, - bullets, **bold**, [text](url). Mentions use normal Slack format <@UXXXXXXXX>.",
       inputSchema: z.object({

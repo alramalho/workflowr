@@ -1,10 +1,15 @@
 import type { App } from "@slack/bolt";
 import { runAgent, shouldRespond } from "../agent/index.js";
-import { getThreadReplies, getChannelHistory, isChannelWritable, WRITABLE_CHANNELS } from "../integrations/slack.js";
+import { getThreadReplies, getChannelHistory } from "../integrations/slack.js";
 import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
+import { getOrgMemberBySlackId } from "../db/org-members.js";
+
+export const ADMIN_USERS: Record<string, string> = {
+  "U08PH00GP9Q": "Alex",
+};
 
 export const ALLOWED_USERS: Record<string, string> = {
-  "U08PH00GP9Q": "Alex",
+  ...ADMIN_USERS,
   "U08U7U3AETF": "Aviral",
   "U09SF8QLZBP": "Vaibhav",
   "U0ACFP1UT2N": "Leandro",
@@ -14,6 +19,27 @@ export const ALLOWED_USERS: Record<string, string> = {
 
 let botUserId: string | undefined;
 const activeThreads = new Set<string>();
+
+function formatTimeAgo(ts: string): string {
+  const msgTime = parseFloat(ts) * 1000;
+  const diff = Date.now() - msgTime;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatReactions(m: any): string {
+  if (!m.reactions?.length) return "";
+  const entries = m.reactions.map((r: any) => {
+    const names = (r.users ?? []).map((u: string) => getOrgMemberBySlackId(u)?.name ?? ALLOWED_USERS[u] ?? `<@${u}>`);
+    return `${r.name}: [${names.join(", ")}]`;
+  });
+  return `\n> reactions: {${entries.join(", ")}}`;
+}
 
 async function getBotUserId(app: App): Promise<string> {
   if (!botUserId) {
@@ -92,14 +118,6 @@ export function registerEvents(app: App) {
 
     const channel = message.channel;
 
-    if (!isDM && !(await isChannelWritable(app, channel))) {
-      await app.client.chat.postEphemeral({
-        channel,
-        user: message.user as string,
-        text: `I'm not only allowed to respond publicly in this channel, only in ${Object.values(WRITABLE_CHANNELS).map((id) => `<#${id}>`).join(", ")}. Ask <@U08PH00GP9Q> if you need this changed.`,
-      });
-      return;
-    }
     const replyTs = threadTs ?? message.ts;
 
     // activate thread on first mention
@@ -114,7 +132,7 @@ export function registerEvents(app: App) {
         const replies = await getThreadReplies(app, channel, threadTs);
         const threadContext = replies
           .filter((m) => m.ts !== message.ts)
-          .map((m) => `<@${m.user}>: ${m.text}`)
+          .map((m) => `[${formatTimeAgo(m.ts!)}] <@${m.user}>: ${m.text}${formatReactions(m)}`)
           .join("\n");
         if (threadContext) context = `Thread context:\n${threadContext}`;
       } else {
@@ -122,7 +140,7 @@ export function registerEvents(app: App) {
         const channelContext = history
           .filter((m) => m.ts !== message.ts)
           .reverse()
-          .map((m) => `<@${m.user}>: ${m.text}`)
+          .map((m) => `[${formatTimeAgo(m.ts!)}] <@${m.user}>: ${m.text}${formatReactions(m)}`)
           .join("\n");
         if (channelContext) context = `Recent channel messages:\n${channelContext}`;
       }
@@ -141,7 +159,7 @@ export function registerEvents(app: App) {
     try {
       const teamId = "team" in message ? (message.team as string | undefined) : undefined;
       const senderName = ALLOWED_USERS[message.user as string];
-      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined);
+      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined, channel, threadTs ?? message.ts);
       await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts });
       await say({ text: response || "I couldn't generate a response.", thread_ts: replyTs });
     } catch (error) {

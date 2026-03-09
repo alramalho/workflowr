@@ -2,6 +2,8 @@
 
 Slack bot ("workflowr") for the Chatarmin team. Built with @slack/bolt + Vercel AI SDK (Claude).
 
+The vision for this bot is to be a teammate like experience that is aware of the work and automates work around the stack. It can have several use cases, like translating threads, being aware of what people are doing, and aiding them in the most diverse ways, focusing on human error and grunt work. (e.g translating threads, summarizing meeting to shared slack canvases, etc)
+
 ## Stack
 - TypeScript, ts-node
 - @slack/bolt for Slack events/commands

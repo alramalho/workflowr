@@ -1,6 +1,9 @@
 import type { App } from "@slack/bolt";
 import * as sm from "../integrations/supermemory.js";
 import { translateThread, translateMessage } from "../integrations/translate.js";
+import { runAgent } from "../agent/index.js";
+import { getThreadReplies } from "../integrations/slack.js";
+import { ALLOWED_USERS } from "./events.js";
 
 interface Memory {
   id: string;
@@ -139,6 +142,106 @@ export function registerActions(app: App) {
         channel: user.id,
         text: `Translation failed: ${reason}`,
       }).catch(() => {});
+    }
+  });
+
+  // message shortcut: Ask Workflowr (ephemeral, with thread context)
+  app.shortcut("ask_workflowr", async ({ shortcut, ack, client }) => {
+    await ack();
+    if (shortcut.type !== "message_action") return;
+
+    const { channel, message } = shortcut;
+    const threadTs = (message as any).thread_ts ?? message.ts;
+
+    await client.views.open({
+      trigger_id: shortcut.trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "ask_workflowr_modal",
+        private_metadata: JSON.stringify({
+          channel_id: channel.id,
+          thread_ts: threadTs,
+        }),
+        title: { type: "plain_text", text: "Ask Workflowr" },
+        submit: { type: "plain_text", text: "Ask" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [
+          {
+            type: "input",
+            block_id: "instruction_block",
+            label: { type: "plain_text", text: "What do you want?" },
+            element: {
+              type: "plain_text_input",
+              action_id: "instruction",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "e.g. summarize this thread" },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  // handle ask_workflowr modal submission
+  app.view("ask_workflowr_modal", async ({ ack, view, body, client }) => {
+    await ack();
+
+    const instruction = view.state.values.instruction_block.instruction.value ?? "";
+    const { channel_id, thread_ts } = JSON.parse(view.private_metadata);
+    const userId = body.user.id;
+    const teamId = body.team?.id;
+    const senderName = ALLOWED_USERS[userId];
+
+    if (!(userId in ALLOWED_USERS)) {
+      await client.chat.postEphemeral({
+        channel: channel_id,
+        user: userId,
+        thread_ts,
+        text: "You're not allowed to use this. Talk to <@U08PH00GP9Q> if you want access.",
+      });
+      return;
+    }
+
+    await client.chat.postEphemeral({
+      channel: channel_id,
+      user: userId,
+      thread_ts,
+      text: "_thinking..._",
+    });
+
+    try {
+      let context = "";
+      const replies = await getThreadReplies(app, channel_id, thread_ts);
+      if (replies.length > 0) {
+        context = `Thread context:\n${replies.map((m) => `<@${m.user}>: ${m.text}`).join("\n")}`;
+      }
+
+      const response = await runAgent(
+        app,
+        instruction,
+        context || undefined,
+        userId,
+        teamId,
+        senderName,
+        undefined,
+        channel_id,
+        thread_ts,
+      );
+
+      await client.chat.postEphemeral({
+        channel: channel_id,
+        user: userId,
+        thread_ts,
+        text: response || "I couldn't generate a response.",
+      });
+    } catch (error) {
+      console.error("Ask Workflowr error:", error);
+      await client.chat.postEphemeral({
+        channel: channel_id,
+        user: userId,
+        thread_ts,
+        text: "Something went wrong while processing your request.",
+      });
     }
   });
 

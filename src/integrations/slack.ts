@@ -1,24 +1,5 @@
 import type { App } from "@slack/bolt";
 
-export const WRITABLE_CHANNELS: Record<string, string> = {
-  ai: "C09SRBNHLF5",
-  development: "C071Z253VE1",
-  "ai-test": "C0AHKQ7U48K",
-};
-
-export async function isChannelWritable(app: App, channelId: string): Promise<boolean> {
-  const names = Object.keys(WRITABLE_CHANNELS);
-  if (names.length === 0) return true;
-  try {
-    const info = await app.client.conversations.info({ channel: channelId });
-    const ch = info.channel as any;
-    if (ch?.is_im || ch?.is_mpim) return true;
-    return ch?.name ? ch.name in WRITABLE_CHANNELS : false;
-  } catch {
-    return false;
-  }
-}
-
 function slackToCanvasMentions(md: string): string {
   return md
     .replace(/<@(U[A-Z0-9]+)>/g, "![](@$1)")
@@ -31,10 +12,6 @@ export async function postMessage(
   text: string,
   blocks?: any[]
 ) {
-  if (!(await isChannelWritable(app, channel))) {
-    console.log(`Skipped postMessage to non-writable channel: ${channel}`);
-    return;
-  }
   return app.client.chat.postMessage({
     channel,
     text,
@@ -116,6 +93,37 @@ export async function editCanvas(
     canvas_id: canvasId,
     changes: [change],
   });
+}
+
+export async function listChannelCanvases(
+  app: App,
+  channelId: string
+) {
+  const canvases: { canvasId: string; title: string; source: string }[] = [];
+
+  // 1. Check the channel's primary canvas via conversations.info
+  try {
+    const info = await app.client.conversations.info({ channel: channelId });
+    const fileId = (info.channel as any)?.properties?.canvas?.file_id;
+    if (fileId) {
+      canvases.push({ canvasId: fileId, title: "(primary channel canvas)", source: "channel_property" });
+    }
+  } catch {}
+
+  // 2. List bookmarks - canvas tabs appear here
+  try {
+    const res = await app.client.apiCall("bookmarks.list", {
+      channel_id: channelId,
+    });
+    const bookmarks = (res as any).bookmarks ?? [];
+    for (const b of bookmarks) {
+      if (b.file_id) {
+        canvases.push({ canvasId: b.file_id, title: b.title ?? "(untitled)", source: "bookmark" });
+      }
+    }
+  } catch {}
+
+  return canvases;
 }
 
 export async function lookupCanvasSections(
