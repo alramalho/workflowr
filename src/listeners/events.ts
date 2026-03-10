@@ -126,13 +126,19 @@ export function registerEvents(app: App) {
     }
 
     let context = "";
+    const myId = await getBotUserId(app);
+    const senderLabel = (m: any) => {
+      if (m.user === myId) return "workflowr (you)";
+      if (m.bot_id || m.bot_profile) return `[app: ${(m.bot_profile as any)?.name ?? m.username ?? "unknown bot"}]`;
+      return `<@${m.user}>`;
+    };
     try {
       try { await app.client.conversations.join({ channel }); } catch {}
       if (threadTs) {
         const replies = await getThreadReplies(app, channel, threadTs);
         const threadContext = replies
           .filter((m) => m.ts !== message.ts)
-          .map((m) => `[${formatTimeAgo(m.ts!)}] <@${m.user}>: ${m.text}${formatReactions(m)}`)
+          .map((m) => `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`)
           .join("\n");
         if (threadContext) context = `Thread context:\n${threadContext}`;
       } else {
@@ -140,7 +146,7 @@ export function registerEvents(app: App) {
         const channelContext = history
           .filter((m) => m.ts !== message.ts)
           .reverse()
-          .map((m) => `[${formatTimeAgo(m.ts!)}] <@${m.user}>: ${m.text}${formatReactions(m)}`)
+          .map((m) => `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`)
           .join("\n");
         if (channelContext) context = `Recent channel messages:\n${channelContext}`;
       }

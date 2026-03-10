@@ -213,7 +213,11 @@ export function registerActions(app: App) {
       let context = "";
       const replies = await getThreadReplies(app, channel_id, thread_ts);
       if (replies.length > 0) {
-        context = `Thread context:\n${replies.map((m) => `<@${m.user}>: ${m.text}`).join("\n")}`;
+        const label = (m: any) => {
+          if (m.bot_id || m.bot_profile) return `[app: ${(m.bot_profile as any)?.name ?? m.username ?? "unknown bot"}]`;
+          return `<@${m.user}>`;
+        };
+        context = `Thread context:\n${replies.map((m) => `${label(m)}: ${m.text}`).join("\n")}`;
       }
 
       const response = await runAgent(
