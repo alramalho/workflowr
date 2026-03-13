@@ -3,6 +3,7 @@ import { runAgent, shouldRespond } from "../agent/index.js";
 import { getThreadReplies, getChannelHistory } from "../integrations/slack.js";
 import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
 import { getOrgMemberBySlackId } from "../db/org-members.js";
+import { getOrgByTeamId } from "../db/orgs.js";
 
 export const ADMIN_USERS: Record<string, string> = {
   "U08PH00GP9Q": "Alex",
@@ -152,10 +153,22 @@ export function registerEvents(app: App) {
       if (!gate) return;
     }
 
+    const teamId = "team" in message ? (message.team as string | undefined) : undefined;
+
+    // gate: org must be set up before the bot responds
+    if (teamId && !getOrgByTeamId(teamId)) {
+      await app.client.chat.postEphemeral({
+        channel,
+        user: message.user as string,
+        text: "Organization is not set up yet. Run `/setup-org` first.",
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      });
+      return;
+    }
+
     await app.client.reactions.add({ channel, name: "eyes", timestamp: message.ts });
 
     try {
-      const teamId = "team" in message ? (message.team as string | undefined) : undefined;
       const senderName = ALLOWED_USERS[message.user as string];
       const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined, channel, threadTs ?? message.ts);
       await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts });

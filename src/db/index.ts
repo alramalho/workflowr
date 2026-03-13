@@ -33,11 +33,35 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS orgs (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT NOT NULL,
+    team_id        TEXT UNIQUE,
+    url            TEXT,
+    description    TEXT,
+    industry       TEXT,
+    location       TEXT,
     github_org     TEXT,
     linear_team_id TEXT,
     metadata       TEXT NOT NULL DEFAULT '{}'
   )
 `);
+
+// migrate: add new columns to existing orgs tables
+const orgTableCols = db.prepare(`PRAGMA table_info(orgs)`).all() as Array<{ name: string }>;
+if (!orgTableCols.some((c) => c.name === "team_id")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN team_id TEXT`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS orgs_team_id_unique ON orgs(team_id)`);
+}
+if (!orgTableCols.some((c) => c.name === "url")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN url TEXT`);
+}
+if (!orgTableCols.some((c) => c.name === "description")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN description TEXT`);
+}
+if (!orgTableCols.some((c) => c.name === "industry")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN industry TEXT`);
+}
+if (!orgTableCols.some((c) => c.name === "location")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN location TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS org_members (
@@ -50,6 +74,7 @@ db.exec(`
     role         TEXT,
     writing_style TEXT,
     representative_example_message TEXT,
+    is_external  INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
@@ -61,6 +86,9 @@ if (!orgCols.some((c) => c.name === "representative_example_message")) {
 }
 if (!orgCols.some((c) => c.name === "linear_id")) {
   db.exec(`ALTER TABLE org_members ADD COLUMN linear_id TEXT`);
+}
+if (!orgCols.some((c) => c.name === "is_external")) {
+  db.exec(`ALTER TABLE org_members ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0`);
 }
 
 db.exec(`
@@ -126,6 +154,35 @@ db.exec(`
     attempts   INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    team_id     TEXT,
+    title       TEXT NOT NULL,
+    description TEXT,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_steps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    parent_step_id  INTEGER REFERENCES task_steps(id) ON DELETE CASCADE,
+    title           TEXT NOT NULL,
+    instructions    TEXT NOT NULL,
+    type            TEXT NOT NULL DEFAULT 'action',
+    schedule        TEXT,
+    tools_needed    TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'pending_confirmation',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
 

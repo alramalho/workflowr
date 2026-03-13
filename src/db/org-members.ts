@@ -10,6 +10,7 @@ export interface OrgMember {
   role: string | null;
   writing_style: string | null;
   representative_example_message: string | null;
+  is_external: number;
   updated_at: string;
 }
 
@@ -42,7 +43,7 @@ export function getAllOrgMembers(teamId?: string): OrgMember[] {
 
 export function updateOrgMember(
   slackId: string,
-  fields: { name?: string; linearId?: string; reportsTo?: string; role?: string; writingStyle?: string; representativeExampleMessage?: string },
+  fields: { name?: string; linearId?: string; reportsTo?: string; role?: string; writingStyle?: string; representativeExampleMessage?: string; isExternal?: boolean },
 ) {
   const member = getOrgMemberBySlackId(slackId);
   if (!member) return undefined;
@@ -55,6 +56,7 @@ export function updateOrgMember(
       role = ?,
       writing_style = ?,
       representative_example_message = ?,
+      is_external = ?,
       updated_at = datetime('now')
     WHERE slack_id = ?
   `).run(
@@ -64,6 +66,7 @@ export function updateOrgMember(
     fields.role !== undefined ? fields.role : member.role,
     fields.writingStyle !== undefined ? fields.writingStyle : member.writing_style,
     fields.representativeExampleMessage !== undefined ? fields.representativeExampleMessage : member.representative_example_message,
+    fields.isExternal !== undefined ? (fields.isExternal ? 1 : 0) : member.is_external,
     slackId,
   );
 

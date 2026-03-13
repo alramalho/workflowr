@@ -4,6 +4,18 @@ import { translateThread, translateMessage } from "../integrations/translate.js"
 import { runAgent } from "../agent/index.js";
 import { getThreadReplies } from "../integrations/slack.js";
 import { ALLOWED_USERS } from "./events.js";
+import { getOrgByTeamId, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
+import { enrichOrgFromUrl, bootstrapOrgAwareness } from "../jobs/org-awareness.js";
+import {
+  getUserTasks,
+  getTaskSteps,
+  getTask,
+  updateTask,
+  updateTaskStep,
+  deleteTask,
+  type Task,
+  type TaskStep,
+} from "../db/tasks.js";
 
 interface Memory {
   id: string;
@@ -89,6 +101,119 @@ export function buildMemoryBlocks(
           },
         },
       });
+    }
+  }
+
+  return blocks;
+}
+
+const STATUS_EMOJI: Record<string, string> = {
+  active: ":large_green_circle:",
+  paused: ":double_vertical_bar:",
+  completed: ":white_check_mark:",
+  pending_confirmation: ":hourglass:",
+  failed: ":x:",
+};
+
+const STEP_TYPE_LABEL: Record<string, string> = {
+  cron: ":repeat: cron",
+  trigger: ":zap: trigger",
+  action: ":arrow_forward: action",
+  check: ":mag: check",
+};
+
+function buildStepTree(steps: TaskStep[]): { step: TaskStep; children: TaskStep[] }[] {
+  const topLevel = steps.filter((s) => !s.parent_step_id);
+  return topLevel.map((s) => ({
+    step: s,
+    children: steps.filter((c) => c.parent_step_id === s.id),
+  }));
+}
+
+export function buildTaskBlocks(userId: string, teamId?: string): any[] {
+  const tasks = getUserTasks(userId, teamId);
+  const blocks: any[] = [];
+
+  blocks.push({
+    type: "section",
+    text: { type: "mrkdwn", text: "*Your Tasks*" },
+  });
+
+  if (tasks.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_No tasks yet. Chat with me to set one up!_" },
+    });
+    return blocks;
+  }
+
+  for (const task of tasks) {
+    const emoji = STATUS_EMOJI[task.status] ?? ":grey_question:";
+    const steps = getTaskSteps(task.id);
+    const tree = buildStepTree(steps);
+
+    const stepLines: string[] = [];
+    for (const { step, children } of tree) {
+      const sEmoji = STATUS_EMOJI[step.status] ?? "";
+      const typeLabel = STEP_TYPE_LABEL[step.type] ?? step.type;
+      const schedule = step.schedule ? ` \`${step.schedule}\`` : "";
+      stepLines.push(`  ${sEmoji} ${typeLabel}${schedule} — ${step.title}`);
+      for (const child of children) {
+        const cEmoji = STATUS_EMOJI[child.status] ?? "";
+        const cType = STEP_TYPE_LABEL[child.type] ?? child.type;
+        const cSchedule = child.schedule ? ` \`${child.schedule}\`` : "";
+        stepLines.push(`    ${cEmoji} ${cType}${cSchedule} — ${child.title}`);
+      }
+    }
+
+    const desc = task.description ? `\n> ${task.description}` : "";
+    const stepsText = stepLines.length > 0 ? `\n${stepLines.join("\n")}` : "\n  _No steps yet_";
+
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${emoji} *${task.title}*${desc}${stepsText}`,
+      },
+    });
+
+    const actions: any[] = [];
+    if (task.status === "active") {
+      actions.push({
+        type: "button",
+        text: { type: "plain_text", text: "Pause" },
+        action_id: `task_pause_${task.id}`,
+      });
+    } else if (task.status === "paused") {
+      actions.push({
+        type: "button",
+        text: { type: "plain_text", text: "Resume" },
+        action_id: `task_resume_${task.id}`,
+      });
+    }
+    if (task.status !== "completed") {
+      actions.push({
+        type: "button",
+        text: { type: "plain_text", text: "Complete" },
+        action_id: `task_complete_${task.id}`,
+      });
+    }
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Delete" },
+      action_id: `task_delete_${task.id}`,
+      style: "danger",
+      confirm: {
+        title: { type: "plain_text", text: "Delete task?" },
+        text: { type: "plain_text", text: "This will permanently delete this task and all its steps." },
+        confirm: { type: "plain_text", text: "Delete" },
+        deny: { type: "plain_text", text: "Cancel" },
+      },
+    });
+
+    if (actions.length > 0) {
+      blocks.push({ type: "actions", elements: actions });
     }
   }
 
@@ -249,6 +374,129 @@ export function registerActions(app: App) {
     }
   });
 
+  // handle setup-org modal submission
+  app.view("setup_org_modal", async ({ ack, view, body, client }) => {
+    await ack();
+
+    const url = view.state.values.org_url_block.org_url.value?.trim() ?? "";
+    const teamId = body.team?.id;
+    const userId = body.user.id;
+
+    if (!url || !teamId) return;
+
+    try {
+      await client.chat.postMessage({
+        channel: userId,
+        text: `Looking up _${url}_... this may take a moment.`,
+      });
+
+      const info = await enrichOrgFromUrl(url);
+
+      const existing = getOrgByTeamId(teamId);
+      if (existing) {
+        updateOrg(existing.id, {
+          name: info.name,
+          url,
+          description: info.description,
+          industry: info.industry,
+          location: info.location,
+        });
+      } else {
+        createOrg(info.name, {
+          teamId,
+          url,
+          description: info.description,
+          industry: info.industry,
+          location: info.location,
+        });
+      }
+
+      await client.chat.postMessage({
+        channel: userId,
+        text: [
+          `Organization set up:`,
+          `*${info.name}*`,
+          info.description ? `> ${info.description}` : null,
+          info.industry ? `Industry: ${info.industry}` : null,
+          info.location ? `Location: ${info.location}` : null,
+          "",
+          "_Bootstrapping org awareness from recent threads... this runs in the background._",
+        ].filter(Boolean).join("\n"),
+      });
+
+      // bootstrap org awareness in the background
+      bootstrapOrgAwareness(app, teamId).then((count) => {
+        client.chat.postMessage({
+          channel: userId,
+          text: `Org awareness bootstrap complete — analyzed ${count} threads.`,
+        });
+      }).catch((e) => {
+        console.error("Bootstrap error:", e);
+        client.chat.postMessage({
+          channel: userId,
+          text: "Org awareness bootstrap failed. Profiles will build up organically from thread activity.",
+        });
+      });
+    } catch (error) {
+      console.error("Setup org error:", error);
+      await client.chat.postMessage({
+        channel: userId,
+        text: "Something went wrong setting up the organization. Please try again.",
+      });
+    }
+  });
+
+  // edit org setup — opens the same modal pre-filled
+  app.action("setup_org_edit", async ({ ack, body, client }) => {
+    await ack();
+    if (!("trigger_id" in body)) return;
+
+    const teamId = body.team?.id;
+    const existing = teamId ? getOrgByTeamId(teamId) : undefined;
+
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "setup_org_modal",
+        title: { type: "plain_text", text: "Edit Organization" },
+        submit: { type: "plain_text", text: "Save" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [
+          {
+            type: "input",
+            block_id: "org_url_block",
+            label: { type: "plain_text", text: "Organization URL" },
+            element: {
+              type: "plain_text_input",
+              action_id: "org_url",
+              placeholder: { type: "plain_text", text: "e.g. chatarmin.com" },
+              ...(existing?.url ? { initial_value: existing.url } : {}),
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  // delete org setup
+  app.action("setup_org_delete", async ({ ack, body, respond }) => {
+    await ack();
+    const teamId = body.team?.id;
+    if (!teamId) return;
+
+    const existing = getOrgByTeamId(teamId);
+    if (existing) {
+      deleteOrg(existing.id);
+    }
+
+    await respond({
+      text: "Organization setup deleted. Run `/setup-org` to set it up again.",
+      replace_original: true,
+      response_type: "ephemeral",
+    });
+  });
+
   // delete a memory
   app.action(/^memory_delete_.+/, async ({ action, ack, respond }) => {
     await ack();
@@ -314,6 +562,35 @@ export function registerActions(app: App) {
         ],
       },
     });
+  });
+
+  // task actions: pause, resume, complete, delete
+  app.action(/^task_pause_\d+$/, async ({ action, ack, respond }) => {
+    await ack();
+    const taskId = parseInt((action as any).action_id.replace("task_pause_", ""));
+    updateTask(taskId, { status: "paused" });
+    await respond({ text: `Task #${taskId} paused.`, replace_original: false, response_type: "ephemeral" });
+  });
+
+  app.action(/^task_resume_\d+$/, async ({ action, ack, respond }) => {
+    await ack();
+    const taskId = parseInt((action as any).action_id.replace("task_resume_", ""));
+    updateTask(taskId, { status: "active" });
+    await respond({ text: `Task #${taskId} resumed.`, replace_original: false, response_type: "ephemeral" });
+  });
+
+  app.action(/^task_complete_\d+$/, async ({ action, ack, respond }) => {
+    await ack();
+    const taskId = parseInt((action as any).action_id.replace("task_complete_", ""));
+    updateTask(taskId, { status: "completed" });
+    await respond({ text: `Task #${taskId} completed.`, replace_original: false, response_type: "ephemeral" });
+  });
+
+  app.action(/^task_delete_\d+$/, async ({ action, ack, respond }) => {
+    await ack();
+    const taskId = parseInt((action as any).action_id.replace("task_delete_", ""));
+    deleteTask(taskId);
+    await respond({ text: `Task #${taskId} deleted.`, replace_original: false, response_type: "ephemeral" });
   });
 
   // handle modal submission

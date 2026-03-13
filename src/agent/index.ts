@@ -9,6 +9,7 @@ import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { getAllOrgMembers } from "../db/org-members.js";
 import { getGuidelines } from "../db/org-guidelines.js";
+import { getUserTasks, getTaskSteps } from "../db/tasks.js";
 
 function getSystemPrompt() {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -22,6 +23,15 @@ function getSystemPrompt() {
   Not every mention is a request. If someone mentions you casually (e.g. "check out @workflowr", "powered by @workflowr") and there's no question or task for you, be cheeky about it — don't try to answer a question that wasn't asked.
 
   Example tone: "you've got 5 urgent issues in the backlog, 3 are bugs. CHA-4934 and CHA-4485 look like the same root cause tbh. here's the list:"
+
+  *TASKS*
+  You help users set up persistent tasks — high-level goals you help them accomplish over time (e.g. "Help me manage the AI team", "Remind me of un-followed-up conversations").
+  You have task_* tools to create tasks and add steps. When a user describes a workflow they want automated:
+  1. Create a task with a clear title
+  2. Ask clarifying questions to understand what exactly they need (sources, destinations, cadence, conditions)
+  3. Propose steps (cron, trigger, action, check) and get explicit confirmation before activating each
+  4. Steps with type 'cron' will automatically run on schedule once activated
+  Users can see their tasks via /my-workflowr
 
   *ROUTING*
   You have specialized agents. Route tasks to them:
@@ -114,7 +124,8 @@ export async function runAgent(
   }
 
   // inject org awareness context
-  const orgMembers = getAllOrgMembers(teamId);
+  const allMembers = getAllOrgMembers(teamId);
+  const orgMembers = allMembers.filter((m) => !m.is_external);
   if (orgMembers.length > 0) {
     const orgLines = orgMembers.map((m) => {
       const parts = [`${m.name} (${m.slack_id})`];
@@ -129,6 +140,19 @@ export async function runAgent(
       return `• ${parts.join(" | ")}`;
     });
     systemPrompt += `\n\nOrg context (auto-built from observing threads):\n${orgLines.join("\n")}`;
+  }
+
+  // inject active tasks context
+  if (slackUserId) {
+    const userTasks = getUserTasks(slackUserId, teamId ?? undefined).filter((t) => t.status === "active");
+    if (userTasks.length > 0) {
+      const taskLines = userTasks.map((t) => {
+        const steps = getTaskSteps(t.id);
+        const stepSummary = steps.map((s) => `  - [${s.status}] ${s.type}${s.schedule ? ` (${s.schedule})` : ""}: ${s.title}`).join("\n");
+        return `• #${t.id} ${t.title}${stepSummary ? `\n${stepSummary}` : ""}`;
+      });
+      systemPrompt += `\n\nUser's active tasks:\n${taskLines.join("\n")}`;
+    }
   }
 
   // inject org guidelines
