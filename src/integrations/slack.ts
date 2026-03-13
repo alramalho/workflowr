@@ -99,18 +99,23 @@ export async function listChannelCanvases(
   app: App,
   channelId: string
 ) {
-  const canvases: { canvasId: string; title: string; source: string }[] = [];
+  const canvases: { canvasId: string; title: string; source: string; channelName?: string }[] = [];
+
+  const errors: string[] = [];
 
   // 1. Check the channel's primary canvas via conversations.info
   try {
     const info = await app.client.conversations.info({ channel: channelId });
+    const channelName = (info.channel as any)?.name;
     const fileId = (info.channel as any)?.properties?.canvas?.file_id;
     if (fileId) {
-      canvases.push({ canvasId: fileId, title: "(primary channel canvas)", source: "channel_property" });
+      canvases.push({ canvasId: fileId, title: "(primary channel canvas)", source: "channel_property", channelName: channelName ? `#${channelName}` : channelId });
     }
-  } catch {}
+  } catch (e: any) {
+    errors.push(`conversations.info failed: ${e.data?.error ?? e.message}`);
+  }
 
-  // 2. List bookmarks - canvas tabs appear here
+  // 2. List bookmarks
   try {
     const res = await app.client.apiCall("bookmarks.list", {
       channel_id: channelId,
@@ -121,8 +126,30 @@ export async function listChannelCanvases(
         canvases.push({ canvasId: b.file_id, title: b.title ?? "(untitled)", source: "bookmark" });
       }
     }
-  } catch {}
+  } catch (e: any) {
+    errors.push(`bookmarks.list failed: ${e.data?.error ?? e.message}`);
+  }
 
+  // 3. List canvas files in channel (catches canvas tabs created via conversations.canvases.create)
+  try {
+    const res = await app.client.apiCall("files.list", {
+      channel: channelId,
+      types: "canvases",
+    });
+    const files = (res as any).files ?? [];
+    const existingIds = new Set(canvases.map(c => c.canvasId));
+    for (const f of files) {
+      if (f.id && !existingIds.has(f.id)) {
+        canvases.push({ canvasId: f.id, title: f.title ?? f.name ?? "(untitled)", source: "files_list" });
+      }
+    }
+  } catch (e: any) {
+    errors.push(`files.list failed: ${e.data?.error ?? e.message}`);
+  }
+
+  if (canvases.length === 0 && errors.length > 0) {
+    return { canvases: [], errors, warning: "Could not list canvases — check bot permissions (bookmarks:read, channels:read)." };
+  }
   return canvases;
 }
 

@@ -2,13 +2,14 @@ import type { App } from "@slack/bolt";
 import { scheduleJob } from "../db/delayed-jobs.js";
 import { registerJobHandler } from "./job-runner.js";
 import { getThreadReplies } from "../integrations/slack.js";
-import { searchIssues, getIssue } from "../integrations/linear.js";
+import { getIssueByIdentifier } from "../integrations/linear.js";
 import {
   linkIssueToThread,
   getUnresolvedLinks,
   markResolved,
 } from "../db/issue-thread-links.js";
 import { ADMIN_USERS } from "../listeners/events.js";
+import { getAllOrgMembers } from "../db/org-members.js";
 
 const JOB_TYPE = "linear-done-nudge";
 const NUDGE_DELAY_MS = 60 * 60 * 1000; // 1 hour
@@ -76,11 +77,8 @@ async function pollLinkedIssues(app: App) {
 
   for (const link of links) {
     try {
-      const results = await searchIssues(link.issue_identifier);
-      const found = results[0];
-      if (!found) continue;
-
-      const issue = await getIssue(found.id);
+      const issue = await getIssueByIdentifier(link.issue_identifier);
+      if (!issue) continue;
       if (!issue.state || issue.state.name.toLowerCase() !== "done") continue;
 
       // Issue is Done — schedule a nudge (dedup by issue identifier)
@@ -131,13 +129,18 @@ async function handleNudge(app: App, payload: Record<string, unknown>) {
     return;
   }
 
-  const results = await searchIssues(issueIdentifier);
-  const found = results[0];
-  if (!found) return;
-
-  const issue = await getIssue(found.id);
+  const issue = await getIssueByIdentifier(issueIdentifier);
+  if (!issue) return;
   if (!issue.assignee) {
     console.log(`${JOB_TYPE}: ${issueIdentifier} has no assignee`);
+    return;
+  }
+
+  // Only nudge about issues assigned to admin users
+  const orgMembers = getAllOrgMembers();
+  const assigneeMember = orgMembers.find(m => m.linear_id === issue.assignee!.id);
+  if (!assigneeMember || !ADMIN_USERS[assigneeMember.slack_id]) {
+    console.log(`${JOB_TYPE}: ${issueIdentifier} assignee (${issue.assignee.name}) is not an admin, skipping`);
     return;
   }
 

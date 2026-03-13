@@ -79,6 +79,45 @@ export function registerCommands(app: App) {
     });
   });
 
+  app.command("/remember", async ({ command, ack }) => {
+    await ack();
+
+    if (!config.ai.supermemoryApiKey) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Memory is not configured on this bot.",
+      });
+      return;
+    }
+
+    const content = command.text?.trim();
+    if (!content) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Usage: `/remember something you want me to remember`",
+      });
+      return;
+    }
+
+    try {
+      await sm.addMemory(content, sm.userTag(command.user_id));
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: `Remembered: _${content}_`,
+      });
+    } catch (error) {
+      console.error("Remember command error:", error);
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Something went wrong saving that memory.",
+      });
+    }
+  });
+
   app.command("/memory", async ({ command, ack }) => {
     await ack();
 

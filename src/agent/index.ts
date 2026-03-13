@@ -4,16 +4,16 @@ import { createHelicone } from "@helicone/ai-sdk-provider";
 import type { App } from "@slack/bolt";
 import dedent from "dedent";
 import { config } from "../config.js";
-import { createTools } from "./tools.js";
+import { createOrchestratorTools } from "./subagents.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
-import { getAllOrgMembers, type OrgMember } from "../db/org-members.js";
+import { getAllOrgMembers } from "../db/org-members.js";
 import { getGuidelines } from "../db/org-guidelines.js";
 
 function getSystemPrompt() {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   return dedent`
-  You are a blunt, salty teammate. You have access to Linear, GitHub, Slack, and Google Calendar tools — use them when there's actual work to do. Otherwise just chat like a normal person.
+  You are a blunt, salty teammate. You coordinate work across Linear, GitHub, Slack, and Google Calendar through specialized agents.
 
   Today is ${today}. Use this to correctly label events as "today", "yesterday", "tomorrow", etc.
 
@@ -22,6 +22,20 @@ function getSystemPrompt() {
   Not every mention is a request. If someone mentions you casually (e.g. "check out @workflowr", "powered by @workflowr") and there's no question or task for you, be cheeky about it — don't try to answer a question that wasn't asked.
 
   Example tone: "you've got 5 urgent issues in the backlog, 3 are bugs. CHA-4934 and CHA-4485 look like the same root cause tbh. here's the list:"
+
+  *ROUTING*
+  You have specialized agents. Route tasks to them:
+  • explore — Use when the request is vague, ambiguous, or references things you don't have full context on (e.g. "that meeting", "the ticket", "what's going on with X"). Explores across all services in parallel.
+  • linear_agent — Direct Linear operations (search, create, update issues, etc.)
+  • slack_agent — Slack operations (read channels/threads, manage canvases)
+  • github_agent — GitHub operations (PRs, commits, repo activity)
+  • google_calendar_agent — Calendar operations (events, meeting notes)
+
+  When the task is clear and maps to a single service, route directly to the appropriate agent.
+  When unclear or spanning multiple services, use explore first to gather context.
+  You can call multiple agents in parallel if the task spans multiple services and is clear enough.
+
+  IMPORTANT: When agents report missing details for write operations, relay that back to the user — don't guess or fill in blanks.
 
   IMPORTANT: Messages in the context include timestamps (e.g. "[2h ago]", "[1d ago]"). If context contains old/stale requests or tasks (e.g. from hours or days ago), do NOT jump into executing them. Instead, ask the user if they still want that done — priorities change, and old requests may already be handled or no longer relevant. Focus on answering the *current* message first.
 
@@ -62,47 +76,6 @@ export async function shouldRespond(threadContext: string, latestMessage: string
   return result.object.shouldRespond;
 }
 
-export async function hasExplicitConfirmation(conversationHistory: string, action: string): Promise<{ confirmed: boolean; reason: string }> {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone("gemini-3-flash-preview");
-
-  // cap to last 15 messages
-  const lines = conversationHistory.split("\n");
-  const capped = lines.slice(-15).join("\n");
-
-  const result = await generateObject({
-    model,
-    schema: z.object({
-      confirmed: z.boolean(),
-      reason: z.string(),
-    }),
-    prompt: dedent`
-      You are a safety gate for destructive calendar operations in a Slack bot.
-      The bot is about to perform this action: ${action}
-
-      Your job: determine if the user's intent in the conversation supports this operation.
-
-      Return confirmed=true if ANY of these apply:
-      - The user directly requested this action (e.g. "update the event", "delete the duplicate", "change the time to 3pm")
-      - The user agreed to a bot suggestion (e.g. "yes", "do it", "go ahead", "sure", "yep")
-      - The user's request clearly implies this action even if not word-for-word (e.g. "don't create a new one, update the existing one" implies update)
-
-      Return confirmed=false ONLY if:
-      - The user never asked for or agreed to this kind of operation
-      - The action is completely unrelated to what the user discussed
-
-      Err on the side of disallowing the action. If it's ambiguous, disallow it.
-
-      Conversation history (last messages):
-      ${capped}
-
-      Return a short reason explaining your decision.
-    `,
-  });
-
-  return result.object;
-}
-
 export async function runAgent(
   app: App,
   prompt: string,
@@ -116,7 +89,7 @@ export async function runAgent(
 ) {
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone(config.ai.model);
-  const tools = createTools(app, slackUserId, teamId, context, channelId, threadTs);
+  const tools = createOrchestratorTools({ app, slackUserId, teamId, conversationHistory: context, channelId, threadTs });
 
   let systemPrompt = getSystemPrompt();
 
@@ -193,6 +166,12 @@ export async function runAgent(
     messages: [{ role: "user", content: userContent }],
     tools,
     stopWhen: stepCountIs(15),
+    abortSignal: AbortSignal.timeout(120_000),
+    onStepFinish({ toolResults }) {
+      if (toolResults.length) {
+        console.log(`[agent] step done — ${toolResults.length} tool call(s): ${toolResults.map((t: any) => t.toolName).join(", ")}`);
+      }
+    },
   });
 
   return result.text;

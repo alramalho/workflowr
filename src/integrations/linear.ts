@@ -15,6 +15,35 @@ export async function searchIssues(query: string) {
   }));
 }
 
+export async function getIssueByIdentifier(identifier: string) {
+  const match = identifier.match(/^([A-Z]+)-(\d+)$/);
+  if (!match) return null;
+  const [, teamKey, numStr] = match;
+  const results = await client.issues({
+    filter: {
+      team: { key: { eq: teamKey } },
+      number: { eq: parseInt(numStr, 10) },
+    },
+    first: 1,
+  });
+  const issue = results.nodes[0];
+  if (!issue) return null;
+  const state = await issue.state;
+  const assignee = await issue.assignee;
+  const team = await issue.team;
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    description: issue.description,
+    priority: issue.priority,
+    url: issue.url,
+    state: state ? { id: state.id, name: state.name } : null,
+    assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+    team: team ? { id: team.id, name: team.name, key: team.key } : null,
+  };
+}
+
 export async function getIssue(issueId: string) {
   const issue = await client.issue(issueId);
   const state = await issue.state;

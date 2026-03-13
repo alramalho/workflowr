@@ -141,14 +141,6 @@ export function registerEvents(app: App) {
           .map((m) => `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`)
           .join("\n");
         if (threadContext) context = `Thread context:\n${threadContext}`;
-      } else {
-        const history = await getChannelHistory(app, channel, 10);
-        const channelContext = history
-          .filter((m) => m.ts !== message.ts)
-          .reverse()
-          .map((m) => `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`)
-          .join("\n");
-        if (channelContext) context = `Recent channel messages:\n${channelContext}`;
       }
     } catch (e) {
       console.error("Failed to fetch thread/channel context:", e);
