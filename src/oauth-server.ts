@@ -6,7 +6,9 @@ import { upsertToken } from "./db/tokens.js";
 import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { getAllOrgMembers } from "./db/org-members.js";
 import { clearThreadLocks } from "./db/thread-reads.js";
-import { analyzeThread } from "./jobs/org-awareness.js";
+import { analyzeThread, bootstrapOrgAwareness, buildOrgChart } from "./jobs/org-awareness.js";
+import { getOrgByTeamId, getAllOrgs } from "./db/orgs.js";
+import { getTeamsForMember } from "./db/teams.js";
 
 interface ServerOptions {
   slackApp: SlackApp;
@@ -37,10 +39,13 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
       const manager = m.reports_to
         ? members.find((o) => o.slack_id === m.reports_to)?.name ?? m.reports_to
         : null;
+      const teams = getTeamsForMember(m.id).map((t) => t.name);
       return {
         name: m.name,
         slackId: m.slack_id,
         role: m.role,
+        teams,
+        isExternal: !!m.is_external,
         reportsTo: manager,
         writingStyle: m.writing_style,
         representativeExampleMessage: m.representative_example_message,
@@ -51,83 +56,54 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
   });
 
   app.post("/trigger/org-rewatch", express.json(), async (req, res) => {
-    const { slackId, days = 7 } = req.body ?? {};
-    if (!slackId) {
-      res.status(400).json({ error: "slackId is required" });
+    const { notifySlackId } = req.body ?? {};
+    let slackTeamId: string | undefined = req.body?.slackTeamId;
+
+    // default to the only org, require slackTeamId if multiple
+    if (!slackTeamId) {
+      const orgs = getAllOrgs().filter((o) => o.team_id);
+      if (orgs.length === 0) {
+        res.status(400).json({ error: "No organization set up. Run /org-setup first." });
+        return;
+      }
+      if (orgs.length > 1) {
+        res.status(400).json({
+          error: "Multiple organizations found. Provide slackTeamId.",
+          orgs: orgs.map((o) => ({ slackTeamId: o.team_id, name: o.name })),
+        });
+        return;
+      }
+      slackTeamId = orgs[0].team_id!;
+    }
+
+    if (!getOrgByTeamId(slackTeamId)) {
+      res.status(400).json({ error: "Organization not set up for this workspace" });
       return;
     }
 
-    const oldest = String(
-      Math.floor((Date.now() - days * 24 * 60 * 60 * 1000) / 1000),
-    );
+    res.json({ status: "started", slackTeamId });
 
-    res.json({ status: "started", slackId, days });
+    // clear all thread locks and re-bootstrap
+    clearThreadLocks();
 
-    // fire-and-forget: scan channels for threads involving this user
-    const CONCURRENCY = 5;
-    (async () => {
-      try {
-        const channels = await opts.slackApp.client.conversations.list({
-          types: "public_channel,private_channel",
-          exclude_archived: true,
-          limit: 200,
+    bootstrapOrgAwareness(opts.slackApp, slackTeamId).then((count) => {
+      const chart = buildOrgChart(slackTeamId);
+      console.log(`[org-rewatch] Done: analyzed ${count} threads for workspace ${slackTeamId}`);
+      if (notifySlackId) {
+        opts.slackApp.client.chat.postMessage({
+          channel: notifySlackId,
+          text: `Org rewatch complete — analyzed ${count} threads.\n\n${chart}`,
         });
-
-        // phase 1: collect all candidate threads (sequential — Slack rate limits)
-        const candidates: { channelId: string; threadTs: string }[] = [];
-        const threadsSeen = new Set<string>();
-
-        for (const ch of channels.channels ?? []) {
-          if (!ch.id || !ch.is_member) continue;
-
-          const history = await opts.slackApp.client.conversations.history({
-            channel: ch.id,
-            oldest,
-            limit: 200,
-          });
-
-          for (const msg of history.messages ?? []) {
-            const m = msg as any;
-            if (!m.reply_count || m.reply_count === 0) continue;
-
-            const threadKey = `${ch.id}:${m.ts}`;
-            if (threadsSeen.has(threadKey)) continue;
-            threadsSeen.add(threadKey);
-
-            const replies = await opts.slackApp.client.conversations.replies({
-              channel: ch.id,
-              ts: m.ts,
-              limit: 200,
-            });
-            const hasUser = (replies.messages ?? []).some(
-              (r: any) => r.user === slackId,
-            );
-            if (!hasUser) continue;
-
-            candidates.push({ channelId: ch.id, threadTs: m.ts });
-          }
-        }
-
-        console.log(`[org-rewatch] Found ${candidates.length} threads for ${slackId}, analyzing ${CONCURRENCY} at a time...`);
-
-        // phase 2: analyze in parallel batches
-        let analyzed = 0;
-        for (let i = 0; i < candidates.length; i += CONCURRENCY) {
-          const batch = candidates.slice(i, i + CONCURRENCY);
-          await Promise.all(
-            batch.map(async ({ channelId, threadTs }) => {
-              clearThreadLocks(channelId);
-              await analyzeThread(opts.slackApp, channelId, threadTs);
-              analyzed++;
-            }),
-          );
-        }
-
-        console.log(`[org-rewatch] Done: analyzed ${analyzed} threads for ${slackId} (past ${days} days)`);
-      } catch (err) {
-        console.error("[org-rewatch] Error:", err);
       }
-    })();
+    }).catch((err) => {
+      console.error("[org-rewatch] Error:", err);
+      if (notifySlackId) {
+        opts.slackApp.client.chat.postMessage({
+          channel: notifySlackId,
+          text: "Org rewatch failed. Check logs for details.",
+        });
+      }
+    });
   });
 
   app.get("/auth/google/callback", async (req, res) => {

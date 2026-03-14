@@ -11,6 +11,7 @@ import { startJobRunner } from "./jobs/job-runner.js";
 import { setupLinearDoneNudge } from "./jobs/linear-done-nudge.js";
 import { setupOrgAwareness } from "./jobs/org-awareness.js";
 import { setupStaleIssuesReporter } from "./jobs/linear-stale-issues.js";
+import { setupTaskStepExecutor } from "./jobs/task-step-executor.js";
 import { startOAuthServer } from "./oauth-server.js";
 
 const app = new App({
@@ -26,6 +27,7 @@ registerActions(app);
 setupLinearDoneNudge(app);
 setupOrgAwareness(app);
 setupStaleIssuesReporter(app);
+setupTaskStepExecutor(app);
 
 // --- Config ---
 

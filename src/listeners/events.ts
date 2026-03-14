@@ -4,6 +4,8 @@ import { getThreadReplies, getChannelHistory } from "../integrations/slack.js";
 import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
 import { getOrgMemberBySlackId } from "../db/org-members.js";
 import { getOrgByTeamId } from "../db/orgs.js";
+import { saveBotCall, updateBotCallMessageTs } from "../db/bot-calls.js";
+import { getThreadArtifacts } from "../db/artifacts.js";
 
 export const ADMIN_USERS: Record<string, string> = {
   "U08PH00GP9Q": "Alex",
@@ -147,6 +149,14 @@ export function registerEvents(app: App) {
       console.error("Failed to fetch thread/channel context:", e);
     }
 
+    const threadArtifacts = getThreadArtifacts(channel, replyTs);
+    if (threadArtifacts.length > 0) {
+      const artifactLines = threadArtifacts.map(a =>
+        `• artifact:${a.id} — ${a.filename} (${a.mime_type})${a.summary ? ` — "${a.summary}"` : ""}`
+      );
+      context += `\n\nPreviously created artifacts in this thread (can be referenced by artifactId for re-upload without re-querying):\n${artifactLines.join("\n")}`;
+    }
+
     // gate: in active threads (without explicit mention), check if we should respond
     if (isActiveThread && !isMentioned) {
       const gate = await shouldRespond(context, userMessage);
@@ -160,22 +170,36 @@ export function registerEvents(app: App) {
       await app.client.chat.postEphemeral({
         channel,
         user: message.user as string,
-        text: "Organization is not set up yet. Run `/setup-org` first.",
+        text: "Organization is not set up yet. Run `/org-setup` first.",
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       return;
     }
 
-    await app.client.reactions.add({ channel, name: "eyes", timestamp: message.ts });
+    const statusThreadTs = threadTs ?? message.ts;
+    await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "is thinking...", loading_messages: ["is thinking..."] });
 
     try {
       const senderName = ALLOWED_USERS[message.user as string];
-      const response = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined, channel, threadTs ?? message.ts);
-      await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts });
-      await say({ text: response || "I couldn't generate a response.", thread_ts: replyTs });
+      const result = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined, channel, threadTs ?? message.ts, (status) => {
+        app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status, loading_messages: [status] }).catch(() => {});
+      });
+      await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "" });
+      const reply = await say({ text: result.text || "I couldn't generate a response.", thread_ts: replyTs });
+
+      const callId = saveBotCall({
+        callerId: message.user as string,
+        channelId: channel,
+        threadTs: replyTs,
+        prompt: userMessage,
+        response: result.text,
+        toolCalls: result.toolCalls,
+        latencyMs: result.latencyMs,
+      });
+      if (reply.ts) updateBotCallMessageTs(callId, reply.ts);
     } catch (error) {
       console.error("Agent error:", error);
-      await app.client.reactions.remove({ channel, name: "eyes", timestamp: message.ts }).catch(() => {});
+      await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "" }).catch(() => {});
       await say({
         text: "Sorry, something went wrong while processing your request.",
         thread_ts: replyTs,

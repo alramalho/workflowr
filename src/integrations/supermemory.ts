@@ -1,4 +1,6 @@
 import Supermemory from "supermemory";
+import { generateText } from "ai";
+import { createHelicone } from "@helicone/ai-sdk-provider";
 import { config } from "../config.js";
 
 let _client: Supermemory | undefined;
@@ -7,8 +9,11 @@ function client() {
   return _client;
 }
 
-export const userTag = (slackUserId: string) => `user_${slackUserId}`;
-export const orgTag = (teamId: string) => `org_${teamId}`;
+const PROJECT = "workflowr";
+export const userTag = (slackUserId: string) => `${PROJECT}:user_${slackUserId}`;
+export const orgTag = (teamId: string) => `${PROJECT}:org_${teamId}`;
+export const dbSchemaTag = () => `${PROJECT}:db_schema`;
+export const codebaseTag = () => `${PROJECT}:codebase`;
 
 export async function searchMemories(
   query: string,
@@ -44,4 +49,20 @@ export async function listMemories(
 
 export async function deleteMemory(id: string) {
   return client().documents.delete(id);
+}
+
+export async function rephraseMemory(raw: string): Promise<string> {
+  try {
+    const helicone = createHelicone({
+      apiKey: config.ai.heliconeApiKey,
+      headers: { "Helicone-Property-App": "workflowr" },
+    });
+    const result = await generateText({
+      model: helicone("gemini-3-flash-preview"),
+      prompt: `Rephrase this into a concise, outcome-oriented memory. Use the pattern: trigger → action → expected outcome (when applicable). Strip conversational filler, keep concrete details (tool names, IDs, specific values). Return ONLY the rephrased text, nothing else.\n\nRaw: ${raw}`,
+    });
+    return result.text.trim() || raw;
+  } catch {
+    return raw;
+  }
 }

@@ -33,7 +33,9 @@ export function createMemoryTools(ctx: SubagentContext) {
       }),
       execute: async ({ content, scope }) => {
         const tag = scope === "user" ? sm.userTag(slackUserId) : teamId ? sm.orgTag(teamId) : sm.userTag(slackUserId);
-        return sm.addMemory(content, tag);
+        const rephrased = await sm.rephraseMemory(content);
+        await sm.addMemory(rephrased, tag);
+        return { stored: true, scope, content: rephrased };
       },
     }),
   };

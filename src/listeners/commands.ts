@@ -6,7 +6,8 @@ import { sendWeeklyReport } from "../jobs/weekly-report.js";
 import * as sm from "../integrations/supermemory.js";
 import { buildMemoryBlocks, buildTaskBlocks } from "./actions.js";
 import { getOrgByTeamId, createOrg, updateOrg } from "../db/orgs.js";
-import { enrichOrgFromUrl } from "../jobs/org-awareness.js";
+import { enrichOrgFromUrl, buildOrgChart } from "../jobs/org-awareness.js";
+import { ALLOWED_USERS } from "./events.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -104,11 +105,12 @@ export function registerCommands(app: App) {
     }
 
     try {
-      await sm.addMemory(content, sm.userTag(command.user_id));
+      const rephrased = await sm.rephraseMemory(content);
+      await sm.addMemory(rephrased, sm.userTag(command.user_id));
       await app.client.chat.postEphemeral({
         channel: command.channel_id,
         user: command.user_id,
-        text: `Remembered: _${content}_`,
+        text: `Remembered: _${rephrased}_`,
       });
     } catch (error) {
       console.error("Remember command error:", error);
@@ -120,7 +122,7 @@ export function registerCommands(app: App) {
     }
   });
 
-  app.command("/setup-org", async ({ command, ack }) => {
+  app.command("/org-setup", async ({ command, ack }) => {
     await ack();
 
     if (!("trigger_id" in command)) return;
@@ -128,7 +130,8 @@ export function registerCommands(app: App) {
     const existing = command.team_id ? getOrgByTeamId(command.team_id) : undefined;
 
     if (existing?.url && existing?.description) {
-      // org already set up — show current info with edit/delete options
+      // org already set up — show current info + org chart with edit/delete options
+      const chart = command.team_id ? buildOrgChart(command.team_id) : "";
       await app.client.chat.postEphemeral({
         channel: command.channel_id,
         user: command.user_id,
@@ -147,6 +150,13 @@ export function registerCommands(app: App) {
               ].filter(Boolean).join("\n"),
             },
           },
+          ...(chart ? [
+            { type: "divider" as const },
+            {
+              type: "section" as const,
+              text: { type: "mrkdwn" as const, text: chart },
+            },
+          ] : []),
           {
             type: "actions",
             elements: [
@@ -199,6 +209,46 @@ export function registerCommands(app: App) {
     });
   });
 
+  app.command("/create-task", async ({ command, ack }) => {
+    await ack();
+
+    if (!("trigger_id" in command)) return;
+
+    if (!(command.user_id in ALLOWED_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You're not allowed to use this. Talk to <@U08PH00GP9Q> if you want access.",
+      });
+      return;
+    }
+
+    await app.client.views.open({
+      trigger_id: command.trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "create_task_modal",
+        private_metadata: JSON.stringify({ team_id: command.team_id }),
+        title: { type: "plain_text", text: "Create Task" },
+        submit: { type: "plain_text", text: "Create" },
+        close: { type: "plain_text", text: "Cancel" },
+        blocks: [
+          {
+            type: "input",
+            block_id: "task_goal_block",
+            label: { type: "plain_text", text: "What do you want me to help with?" },
+            element: {
+              type: "plain_text_input",
+              action_id: "task_goal",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "e.g. Help me keep deliverables updated after the AI sync meeting" },
+            },
+          },
+        ],
+      },
+    });
+  });
+
   app.command("/my-workflowr", async ({ command, ack }) => {
     await ack();
 
@@ -221,7 +271,7 @@ export function registerCommands(app: App) {
     }
   });
 
-  app.command("/memory", async ({ command, ack }) => {
+  app.command("/memories", async ({ command, ack }) => {
     await ack();
 
     if (!config.ai.supermemoryApiKey) {

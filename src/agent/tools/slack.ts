@@ -108,5 +108,58 @@ export function createSlackTools(ctx: SubagentContext) {
         return lookupCanvasSections(app, canvasId, { sectionTypes, containsText });
       },
     }),
+    slack_upload_file: tool({
+      description: "Upload a file to a Slack channel or thread. Either provide content directly OR reference an artifactId from another agent (e.g. database_agent) to upload its stored file.",
+      inputSchema: z.object({
+        content: z.string().optional().describe("File content as a string. Not needed if artifactId is provided."),
+        artifactId: z.string().optional().describe("Artifact ID from another agent. If provided, file content is loaded automatically."),
+        filename: z.string().optional().describe("Filename with extension. Falls back to artifact filename if artifactId is used."),
+        title: z.string().optional().describe("Human-readable title shown in Slack"),
+        channel: z.string().optional().describe("Channel ID to upload to. Falls back to current channel."),
+        threadTs: z.string().optional().describe("Thread timestamp to upload into. Falls back to current thread."),
+      }),
+      execute: async ({ content, artifactId, filename, title, channel, threadTs }) => {
+        let fileBytes: Buffer;
+        let resolvedFilename: string;
+
+        if (artifactId && ctx.artifacts) {
+          const artifact = ctx.artifacts.get(artifactId);
+          if (!artifact) return { error: `Artifact "${artifactId}" not found.` };
+          fileBytes = artifact.content;
+          resolvedFilename = filename || artifact.filename;
+        } else if (content) {
+          fileBytes = Buffer.from(content, "utf-8");
+          resolvedFilename = filename || "file.txt";
+        } else {
+          return { error: "Provide either content or artifactId." };
+        }
+
+        const targetChannel = channel || ctx.channelId;
+        if (!targetChannel) return { error: "No channel specified and no current channel context available." };
+
+        if (conversationHistory) {
+          const gate = await hasExplicitConfirmation(conversationHistory, `Upload file "${resolvedFilename}" to channel`);
+          if (!gate.confirmed) return { error: `Operation blocked: ${gate.reason}. Ask the user to confirm.` };
+        }
+
+        const targetThread = threadTs || ctx.threadTs;
+
+        const { upload_url, file_id } = await app.client.files.getUploadURLExternal({
+          filename: resolvedFilename,
+          length: fileBytes.length,
+        }) as any;
+
+        await fetch(upload_url, { method: "POST", body: new Uint8Array(fileBytes) });
+
+        const completeArgs: Record<string, any> = {
+          files: [{ id: file_id, title: title || resolvedFilename }],
+          channel_id: targetChannel,
+        };
+        if (targetThread) completeArgs.thread_ts = targetThread;
+        await app.client.files.completeUploadExternal(completeArgs as any);
+
+        return { ok: true, filename: resolvedFilename, channel: targetChannel };
+      },
+    }),
   };
 }

@@ -5,9 +5,11 @@ import type { App } from "@slack/bolt";
 import dedent from "dedent";
 import { config } from "../config.js";
 import { createOrchestratorTools } from "./subagents.js";
+import { ArtifactStore } from "./artifacts.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { getAllOrgMembers } from "../db/org-members.js";
+import { getTeamsForMember } from "../db/teams.js";
 import { getGuidelines } from "../db/org-guidelines.js";
 import { getUserTasks, getTaskSteps } from "../db/tasks.js";
 
@@ -33,19 +35,54 @@ function getSystemPrompt() {
   4. Steps with type 'cron' will automatically run on schedule once activated
   Users can see their tasks via /my-workflowr
 
+  *CONFIDENCE FIRST*
+  You have a confidence_check tool. Use it to assess whether you can resolve the request BEFORE doing anything else.
+  Your confidence level gates your next move:
+  • *high* → you understand exactly what's needed and have the context. Execute with the right agents.
+  • *medium* → you have a rough idea but gaps remain. Explore freely (read Slack channels, search Linear, check GitHub) to build confidence, then confidence_check again.
+  • *low* → you're guessing. Ask the user. Batch all questions into one message. Don't partially execute and then ask.
+
+  Use confidence_check to think things through — before your first action, after getting exploration results back, or whenever there are multiple reasonable paths forward. Don't chain tool calls on autopilot; pause and think when the next step isn't obvious.
+  confidence_check returns a secondOpinion from an adviser — a gentle nudge, not a command. Consider it, but don't flip your plan unless it raises something you genuinely missed.
+  You can explore as much as you want to build confidence, but never deliver results you're not confident in.
+
+  *LEARN FROM RESOLUTIONS*
+  After resolving ambiguity — whether through exploration or user answers — save the key context to memory via memory_add (e.g. "AI team works in Linear project X and repos Y, Z", "weekly report for Alex = Linear + GitHub activity"). Next time, your memories will fill the gap and you can skip the exploration.
+
+  *CORRECTIONS = LEARNING OPPORTUNITIES*
+  When the user pushes back, says you got something wrong, or asks "are you sure about X?":
+  1. Don't just re-query with a tweak — figure out WHY you were wrong (wrong data? wrong assumption? missing domain knowledge?)
+  2. If it's a domain knowledge gap (e.g. you don't know what "workflows" means in the product), use codebase_explore or explore to investigate
+  3. If exploration doesn't fully resolve it, ask specific questions — say what you found and what you're still unsure about. Don't guess.
+  4. Once resolved, ALWAYS save the correction as memory: what you got wrong + what's actually correct. This prevents the same mistake next time.
+
   *ROUTING*
   You have specialized agents. Route tasks to them:
-  • explore — Use when the request is vague, ambiguous, or references things you don't have full context on (e.g. "that meeting", "the ticket", "what's going on with X"). Explores across all services in parallel.
+  • explore — Use when you need to investigate across services to build confidence. Searches Linear, Slack, GitHub, Calendar, and database in parallel. Returns findings with confidence level and open questions.
+  • codebase_explore — Explore product code to understand domain concepts, data models, business logic (e.g. "what counts as a workflow", "how is v3 determined"). Heavyweight (~1-3 min). Use when domain knowledge is genuinely missing.
   • linear_agent — Direct Linear operations (search, create, update issues, etc.)
   • slack_agent — Slack operations (read channels/threads, manage canvases)
   • github_agent — GitHub operations (PRs, commits, repo activity)
   • google_calendar_agent — Calendar operations (events, meeting notes)
+  • database_agent — Direct database queries
 
   When the task is clear and maps to a single service, route directly to the appropriate agent.
   When unclear or spanning multiple services, use explore first to gather context.
   You can call multiple agents in parallel if the task spans multiple services and is clear enough.
 
   IMPORTANT: When agents report missing details for write operations, relay that back to the user — don't guess or fill in blanks.
+
+  IMPORTANT: When database_agent returns results, it includes an "internals" field with tables, fields, and query logic. Always include this in your response (formatted as a brief collapsed/secondary section) so technical users can verify correctness. Example format:
+  > _Internals: counted \`cx_tickets\` rows where \`organization_name\` = 'turbogrün GmbH' and \`created_at\` > 30 days ago_
+
+  *ARTIFACTS*
+  When database_agent returns an artifactId, the full result set is stored as a downloadable file (e.g. CSV).
+  If the user would benefit from the file (tabular data, large lists, etc.), ask slack_agent to upload it: "Upload artifact {artifactId} to the current thread". The slack_upload_file tool accepts an artifactId directly.
+  If the text summary alone answers the question, skip the file upload — not every query needs a file.
+  IMPORTANT: Once you've uploaded a file via slack_agent, do NOT repeat or summarize the data in your text response — the file is already visible. Just add a brief comment (e.g. "here's the breakdown") and the internals. Avoid markdown tables or top-N previews when the file already contains the data.
+
+  IMPORTANT: When you store a memory via memory_add, always append a short quote at the end of your response summarizing what was stored. Example format:
+  > _Remembered (user): Alex prefers issues assigned to CX team by default_
 
   IMPORTANT: Messages in the context include timestamps (e.g. "[2h ago]", "[1d ago]"). If context contains old/stale requests or tasks (e.g. from hours or days ago), do NOT jump into executing them. Instead, ask the user if they still want that done — priorities change, and old requests may already be handled or no longer relevant. Focus on answering the *current* message first.
 
@@ -86,6 +123,31 @@ export async function shouldRespond(threadContext: string, latestMessage: string
   return result.object.shouldRespond;
 }
 
+export interface AgentResult {
+  text: string;
+  toolCalls: { name: string; input: unknown; output: unknown }[];
+  latencyMs: number;
+}
+
+const TOOL_STATUS_LABELS: Record<string, string> = {
+  confidence_check: "thinking...",
+  explore: "exploring...",
+  linear_agent: "checking Linear...",
+  slack_agent: "reading Slack...",
+  github_agent: "checking GitHub...",
+  google_calendar_agent: "checking calendar...",
+  database_agent: "querying the database...",
+  codebase_explore: "exploring codebase...",
+  claude_code: "running Claude Code...",
+  remember: "memorizing...",
+  recall: "recalling memories...",
+};
+
+function toolStatusLabel(toolName: string): string {
+  if (toolName.startsWith("task_")) return "managing tasks...";
+  return TOOL_STATUS_LABELS[toolName] ?? "working...";
+}
+
 export async function runAgent(
   app: App,
   prompt: string,
@@ -96,12 +158,21 @@ export async function runAgent(
   images?: { data: Buffer; mimeType: string }[],
   channelId?: string,
   threadTs?: string,
-) {
+  onStatusUpdate?: (status: string) => void,
+): Promise<AgentResult> {
+  const startTime = Date.now();
   const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
   const model = helicone(config.ai.model);
-  const tools = createOrchestratorTools({ app, slackUserId, teamId, conversationHistory: context, channelId, threadTs });
+  const toolHistory: { tool: string; input: unknown; output: unknown }[] = [];
+  const artifacts = new ArtifactStore();
+  const tools = createOrchestratorTools({ app, slackUserId, teamId, conversationHistory: context, channelId, threadTs, toolHistory, artifacts });
 
   let systemPrompt = getSystemPrompt();
+
+  if (channelId) {
+    const isDM = channelId.startsWith("D");
+    systemPrompt += `\n\nCurrent conversation: ${isDM ? "DM" : `channel ${channelId}`}${threadTs ? `, thread ${threadTs}` : ""}`;
+  }
 
   // proactive memory retrieval
   if (config.ai.supermemoryApiKey && slackUserId) {
@@ -123,6 +194,10 @@ export async function runAgent(
     }
   }
 
+  if (!config.ai.supermemoryApiKey) {
+    systemPrompt += `\n\nYou do NOT have memory capabilities. You cannot remember anything across conversations. If a user asks you to remember something, be honest and tell them memory is not set up yet.`;
+  }
+
   // inject org awareness context
   const allMembers = getAllOrgMembers(teamId);
   const orgMembers = allMembers.filter((m) => !m.is_external);
@@ -135,6 +210,8 @@ export async function runAgent(
         const manager = orgMembers.find((o) => o.slack_id === m.reports_to);
         parts.push(`reports to: ${manager?.name ?? m.reports_to}`);
       }
+      const memberTeams = getTeamsForMember(m.id);
+      if (memberTeams.length > 0) parts.push(`teams: ${memberTeams.map((t) => t.name).join(", ")}`);
       if (m.writing_style) parts.push(`style: ${m.writing_style}`);
       if (m.representative_example_message) parts.push(`example msg: "${m.representative_example_message}"`);
       return `• ${parts.join(" | ")}`;
@@ -191,12 +268,38 @@ export async function runAgent(
     tools,
     stopWhen: stepCountIs(15),
     abortSignal: AbortSignal.timeout(120_000),
-    onStepFinish({ toolResults }) {
+    onStepFinish({ toolCalls, toolResults }) {
+      for (const tc of toolCalls) {
+        const matching = toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
+        toolHistory.push({
+          tool: tc.toolName,
+          input: (tc as any).input ?? (tc as any).args,
+          output: matching ? ((matching as any).output ?? (matching as any).result ?? null) : null,
+        });
+      }
       if (toolResults.length) {
         console.log(`[agent] step done — ${toolResults.length} tool call(s): ${toolResults.map((t: any) => t.toolName).join(", ")}`);
+      }
+      if (onStatusUpdate && toolCalls.length) {
+        const labels = [...new Set(toolCalls.map((tc: any) => toolStatusLabel(tc.toolName)))];
+        onStatusUpdate(labels.join(" "));
       }
     },
   });
 
-  return result.text;
+  const latencyMs = Date.now() - startTime;
+
+  const toolCallRecords: { name: string; input: unknown; output: unknown }[] = [];
+  for (const step of result.steps) {
+    for (const tc of step.toolCalls) {
+      const matching = step.toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
+      toolCallRecords.push({
+        name: tc.toolName,
+        input: (tc as any).input ?? (tc as any).args,
+        output: matching ? ((matching as any).output ?? (matching as any).result ?? null) : null,
+      });
+    }
+  }
+
+  return { text: result.text, toolCalls: toolCallRecords, latencyMs };
 }

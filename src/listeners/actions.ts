@@ -3,19 +3,21 @@ import * as sm from "../integrations/supermemory.js";
 import { translateThread, translateMessage } from "../integrations/translate.js";
 import { runAgent } from "../agent/index.js";
 import { getThreadReplies } from "../integrations/slack.js";
-import { ALLOWED_USERS } from "./events.js";
+import { ALLOWED_USERS, ADMIN_USERS } from "./events.js";
 import { getOrgByTeamId, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
-import { enrichOrgFromUrl, bootstrapOrgAwareness } from "../jobs/org-awareness.js";
+import { enrichOrgFromUrl, bootstrapOrgAwareness, editOrgFromInstruction, buildOrgChart } from "../jobs/org-awareness.js";
 import {
   getUserTasks,
   getTaskSteps,
   getTask,
+  createTask,
   updateTask,
   updateTaskStep,
   deleteTask,
   type Task,
   type TaskStep,
 } from "../db/tasks.js";
+import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
 
 interface Memory {
   id: string;
@@ -74,13 +76,13 @@ export function buildMemoryBlocks(
 
   blocks.push({
     type: "section",
-    text: { type: "mrkdwn", text: "*Team Memories*" },
+    text: { type: "mrkdwn", text: "*Org Memories*" },
   });
 
   if (orgMemories.length === 0) {
     blocks.push({
       type: "section",
-      text: { type: "mrkdwn", text: "_No team memories yet._" },
+      text: { type: "mrkdwn", text: "_No org memories yet._" },
     });
   } else {
     for (const m of orgMemories.slice(0, 15)) {
@@ -142,7 +144,7 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
   if (tasks.length === 0) {
     blocks.push({
       type: "section",
-      text: { type: "mrkdwn", text: "_No tasks yet. Chat with me to set one up!_" },
+      text: { type: "mrkdwn", text: "_No tasks yet. Use `/create-task` to set one up!_" },
     });
     return blocks;
   }
@@ -178,6 +180,7 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
       },
     });
 
+    const hasRecurringSteps = steps.some((s) => (s.type === "cron" || s.type === "trigger") && s.status === "active");
     const actions: any[] = [];
     if (task.status === "active") {
       actions.push({
@@ -192,7 +195,7 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
         action_id: `task_resume_${task.id}`,
       });
     }
-    if (task.status !== "completed") {
+    if (task.status !== "completed" && !hasRecurringSteps) {
       actions.push({
         type: "button",
         text: { type: "plain_text", text: "Complete" },
@@ -220,7 +223,78 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
   return blocks;
 }
 
+function truncate(str: string, max: number): string {
+  if (str.length <= max) return str;
+  return str.slice(0, max) + "...";
+}
+
 export function registerActions(app: App) {
+  // message shortcut: Inspect bot response
+  app.shortcut("inspect", async ({ shortcut, ack, client }) => {
+    await ack();
+    if (shortcut.type !== "message_action") return;
+
+    const { channel, message, user } = shortcut;
+
+    if (!(user.id in ADMIN_USERS)) {
+      await client.chat.postEphemeral({
+        channel: channel.id,
+        user: user.id,
+        thread_ts: (message as any).thread_ts ?? message.ts,
+        text: "You're not authorized to use this. Ask <@U08PH00GP9Q> if you want access.",
+      });
+      return;
+    }
+
+    const call = getBotCallByMessageTs(channel.id, message.ts);
+
+    if (!call) {
+      await client.chat.postEphemeral({
+        channel: channel.id,
+        user: user.id,
+        thread_ts: (message as any).thread_ts ?? message.ts,
+        text: "No agent call found for this message.",
+      });
+      return;
+    }
+
+    const callerName = ALLOWED_USERS[call.caller_id] ?? call.caller_id;
+    const latencySec = (call.latency_ms / 1000).toFixed(1);
+
+    const blocks: any[] = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Inspect Agent Call*\n• *Caller:* ${callerName}\n• *Latency:* ${latencySec}s\n• *Tool calls:* ${call.tool_calls.length}\n• *Time:* ${call.created_at}`,
+        },
+      },
+    ];
+
+    if (call.tool_calls.length > 0) {
+      blocks.push({ type: "divider" });
+      for (const tc of call.tool_calls) {
+        const inputStr = truncate(JSON.stringify(tc.input, null, 2), 2500);
+        const outputStr = truncate(JSON.stringify(tc.output, null, 2), 2500);
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${tc.name}*\n\`\`\`${inputStr}\`\`\`\n_Output:_\n\`\`\`${outputStr}\`\`\``,
+          },
+        });
+      }
+    }
+
+    await client.chat.postEphemeral({
+      channel: channel.id,
+      user: user.id,
+      thread_ts: (message as any).thread_ts ?? message.ts,
+      blocks,
+      text: `Inspect: ${call.tool_calls.length} tool call(s), ${latencySec}s latency`,
+    });
+  });
+
   // message shortcut: Translate message or thread
   app.shortcut("translate_thread", async ({ shortcut, ack, client }) => {
     await ack();
@@ -345,7 +419,7 @@ export function registerActions(app: App) {
         context = `Thread context:\n${replies.map((m) => `${label(m)}: ${m.text}`).join("\n")}`;
       }
 
-      const response = await runAgent(
+      const result = await runAgent(
         app,
         instruction,
         context || undefined,
@@ -357,11 +431,21 @@ export function registerActions(app: App) {
         thread_ts,
       );
 
+      saveBotCall({
+        callerId: userId,
+        channelId: channel_id,
+        threadTs: thread_ts,
+        prompt: instruction,
+        response: result.text,
+        toolCalls: result.toolCalls,
+        latencyMs: result.latencyMs,
+      });
+
       await client.chat.postEphemeral({
         channel: channel_id,
         user: userId,
         thread_ts,
-        text: response || "I couldn't generate a response.",
+        text: result.text || "I couldn't generate a response.",
       });
     } catch (error) {
       console.error("Ask Workflowr error:", error);
@@ -426,9 +510,10 @@ export function registerActions(app: App) {
 
       // bootstrap org awareness in the background
       bootstrapOrgAwareness(app, teamId).then((count) => {
+        const chart = buildOrgChart(teamId);
         client.chat.postMessage({
           channel: userId,
-          text: `Org awareness bootstrap complete — analyzed ${count} threads.`,
+          text: `Org awareness bootstrap complete — analyzed ${count} threads.\n\n${chart}`,
         });
       }).catch((e) => {
         console.error("Bootstrap error:", e);
@@ -446,37 +531,127 @@ export function registerActions(app: App) {
     }
   });
 
-  // edit org setup — opens the same modal pre-filled
+  // handle create-task modal submission
+  app.view("create_task_modal", async ({ ack, view, body, client }) => {
+    await ack();
+
+    const goal = view.state.values.task_goal_block.task_goal.value?.trim() ?? "";
+    const { team_id: teamId } = JSON.parse(view.private_metadata);
+    const userId = body.user.id;
+    const senderName = ALLOWED_USERS[userId];
+
+    if (!goal) return;
+
+    const task = createTask(userId, goal, { teamId });
+
+    // DM the user and kick off the breakdown conversation
+    const dm = await client.chat.postMessage({
+      channel: userId,
+      text: `*New task created:* ${goal}\n\n_Let me figure out how to break this down for you..._`,
+    });
+
+    const threadTs = dm.ts;
+
+    try {
+      const prompt = `The user just created a new task via /create-task. The task has been saved (task #${task.id}).
+
+Their goal: "${goal}"
+
+Your job now is to break this task down into actionable steps. Ask the user clarifying questions to understand:
+1. What tools/integrations are needed (Linear, Slack, GitHub, Google Calendar)?
+2. What's the cadence — is this recurring (cron) or one-off?
+3. Where does the information come from and where should results go?
+4. Any specific conditions or thresholds?
+
+Be conversational and specific. Propose concrete steps once you have enough info. Do NOT create steps yet — first get confirmation from the user on the breakdown. Keep it concise.`;
+
+      const result = await runAgent(app, prompt, undefined, userId, teamId, senderName, undefined, userId, threadTs);
+
+      await client.chat.postMessage({
+        channel: userId,
+        text: result.text || "Let's figure this out — what tools and cadence does this involve?",
+        thread_ts: threadTs,
+      });
+    } catch (error) {
+      console.error("Task breakdown error:", error);
+      await client.chat.postMessage({
+        channel: userId,
+        text: "Something went wrong starting the breakdown. DM me directly to continue setting up this task.",
+        thread_ts: threadTs,
+      });
+    }
+  });
+
+  // edit org setup — free-text instruction to update org info
   app.action("setup_org_edit", async ({ ack, body, client }) => {
     await ack();
     if (!("trigger_id" in body)) return;
-
-    const teamId = body.team?.id;
-    const existing = teamId ? getOrgByTeamId(teamId) : undefined;
 
     await client.views.open({
       trigger_id: body.trigger_id,
       view: {
         type: "modal",
-        callback_id: "setup_org_modal",
+        callback_id: "edit_org_modal",
         title: { type: "plain_text", text: "Edit Organization" },
-        submit: { type: "plain_text", text: "Save" },
+        submit: { type: "plain_text", text: "Update" },
         close: { type: "plain_text", text: "Cancel" },
         blocks: [
           {
             type: "input",
-            block_id: "org_url_block",
-            label: { type: "plain_text", text: "Organization URL" },
+            block_id: "edit_instruction_block",
+            label: { type: "plain_text", text: "What do you want to change?" },
             element: {
               type: "plain_text_input",
-              action_id: "org_url",
-              placeholder: { type: "plain_text", text: "e.g. chatarmin.com" },
-              ...(existing?.url ? { initial_value: existing.url } : {}),
+              action_id: "edit_instruction",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "e.g. We moved to Berlin, our industry is actually fintech" },
             },
           },
         ],
       },
     });
+  });
+
+  // handle edit org modal submission
+  app.view("edit_org_modal", async ({ ack, view, body, client }) => {
+    await ack();
+
+    const instruction = view.state.values.edit_instruction_block.edit_instruction.value?.trim() ?? "";
+    const teamId = body.team?.id;
+    const userId = body.user.id;
+
+    if (!instruction || !teamId) return;
+
+    const existing = getOrgByTeamId(teamId);
+    if (!existing) return;
+
+    try {
+      const updated = await editOrgFromInstruction(existing, instruction);
+
+      updateOrg(existing.id, {
+        name: updated.name,
+        description: updated.description,
+        industry: updated.industry,
+        location: updated.location,
+      });
+
+      await client.chat.postMessage({
+        channel: userId,
+        text: [
+          `Organization updated:`,
+          `*${updated.name}*`,
+          updated.description ? `> ${updated.description}` : null,
+          updated.industry ? `Industry: ${updated.industry}` : null,
+          updated.location ? `Location: ${updated.location}` : null,
+        ].filter(Boolean).join("\n"),
+      });
+    } catch (error) {
+      console.error("Edit org error:", error);
+      await client.chat.postMessage({
+        channel: userId,
+        text: "Something went wrong updating the organization.",
+      });
+    }
   });
 
   // delete org setup
@@ -491,7 +666,7 @@ export function registerActions(app: App) {
     }
 
     await respond({
-      text: "Organization setup deleted. Run `/setup-org` to set it up again.",
+      text: "Organization setup deleted. Run `/org-setup` to set it up again.",
       replace_original: true,
       response_type: "ephemeral",
     });
@@ -549,7 +724,7 @@ export function registerActions(app: App) {
                   value: "user",
                 },
                 {
-                  text: { type: "plain_text", text: "Team" },
+                  text: { type: "plain_text", text: "Org" },
                   value: "org",
                 },
               ],

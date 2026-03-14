@@ -92,6 +92,24 @@ if (!orgCols.some((c) => c.name === "is_external")) {
 }
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS teams (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id  INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    name    TEXT NOT NULL,
+    UNIQUE(org_id, name)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS team_members (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    org_member_id INTEGER NOT NULL REFERENCES org_members(id) ON DELETE CASCADE,
+    UNIQUE(team_id, org_member_id)
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS thread_reads (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id   TEXT NOT NULL,
@@ -183,6 +201,34 @@ db.exec(`
     status          TEXT NOT NULL DEFAULT 'pending_confirmation',
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    caller_id   TEXT NOT NULL,
+    channel_id  TEXT NOT NULL,
+    thread_ts   TEXT,
+    message_ts  TEXT,
+    prompt      TEXT NOT NULL,
+    response    TEXT,
+    tool_calls  TEXT NOT NULL DEFAULT '[]',
+    latency_ms  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS artifacts (
+    id         TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    thread_ts  TEXT NOT NULL,
+    filename   TEXT NOT NULL,
+    mime_type  TEXT NOT NULL,
+    summary    TEXT,
+    content    BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
 
