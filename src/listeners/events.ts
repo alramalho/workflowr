@@ -5,6 +5,7 @@ import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/trans
 import { getOrgMemberBySlackId } from "../db/org-members.js";
 import { getOrgByTeamId } from "../db/orgs.js";
 import { saveBotCall, updateBotCallMessageTs } from "../db/bot-calls.js";
+import { textToBlocksWithTable } from "../slack-table.js";
 import { getThreadArtifacts } from "../db/artifacts.js";
 
 export const ADMIN_USERS: Record<string, string> = {
@@ -185,7 +186,13 @@ export function registerEvents(app: App) {
         app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status, loading_messages: [status] }).catch(() => {});
       });
       await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "" });
-      const reply = await say({ text: result.text || "I couldn't generate a response.", thread_ts: replyTs });
+      const responseText = result.text || "I couldn't generate a response.";
+      const tableResult = textToBlocksWithTable(responseText);
+      const reply = await say({
+        text: responseText,
+        thread_ts: replyTs,
+        ...(tableResult && { blocks: tableResult.blocks }),
+      });
 
       const callId = saveBotCall({
         callerId: message.user as string,

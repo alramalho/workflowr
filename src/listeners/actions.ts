@@ -4,6 +4,7 @@ import { translateThread, translateMessage } from "../integrations/translate.js"
 import { runAgent } from "../agent/index.js";
 import { getThreadReplies } from "../integrations/slack.js";
 import { ALLOWED_USERS, ADMIN_USERS } from "./events.js";
+import { textToBlocksWithTable } from "../slack-table.js";
 import { getOrgByTeamId, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
 import { enrichOrgFromUrl, bootstrapOrgAwareness, editOrgFromInstruction, buildOrgChart } from "../jobs/org-awareness.js";
 import {
@@ -567,10 +568,13 @@ Be conversational and specific. Propose concrete steps once you have enough info
 
       const result = await runAgent(app, prompt, undefined, userId, teamId, senderName, undefined, userId, threadTs);
 
+      const breakdownText = result.text || "Let's figure this out — what tools and cadence does this involve?";
+      const tableResult = textToBlocksWithTable(breakdownText);
       await client.chat.postMessage({
         channel: userId,
-        text: result.text || "Let's figure this out — what tools and cadence does this involve?",
+        text: breakdownText,
         thread_ts: threadTs,
+        ...(tableResult && { blocks: tableResult.blocks }),
       });
     } catch (error) {
       console.error("Task breakdown error:", error);

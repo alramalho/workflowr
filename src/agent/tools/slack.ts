@@ -9,6 +9,7 @@ import {
   listChannelCanvases,
   lookupCanvasSections,
 } from "../../integrations/slack.js";
+import { getSlackToken } from "../../db/slack-tokens.js";
 import { hasExplicitConfirmation } from "../confirmation.js";
 import type { SubagentContext } from "./types.js";
 
@@ -159,6 +160,66 @@ export function createSlackTools(ctx: SubagentContext) {
         await app.client.files.completeUploadExternal(completeArgs as any);
 
         return { ok: true, filename: resolvedFilename, channel: targetChannel };
+      },
+    }),
+    slack_search_messages: tool({
+      description:
+        "Search Slack messages using the authenticated user's token. Supports Slack search modifiers: " +
+        "from:@user, in:#channel, before:YYYY-MM-DD, after:YYYY-MM-DD, has:link, has:reaction, etc. " +
+        "Useful for finding threads by participant, keyword, or date range.",
+      inputSchema: z.object({
+        query: z.string().describe("Slack search query (e.g. 'from:@alice from:@bob deployment')"),
+        sort: z.enum(["score", "timestamp"]).optional().describe("Sort by relevance or recency"),
+        count: z.number().optional().describe("Number of results (default 20, max 100)"),
+      }),
+      execute: async ({ query, sort, count }) => {
+        const userId = ctx.slackUserId;
+        if (!userId) return { error: "No user context available." };
+
+        const userToken = getSlackToken(userId);
+        if (!userToken) {
+          return {
+            error:
+              "No Slack user token found. Ask the user to run /slack-auth to connect their account for search.",
+          };
+        }
+
+        try {
+          const params = new URLSearchParams({
+            query,
+            sort: sort ?? "timestamp",
+            count: String(count ?? 20),
+          });
+
+          const resp = await fetch(`https://slack.com/api/search.messages?${params}`, {
+            headers: { Authorization: `Bearer ${userToken}` },
+          });
+
+          const data = (await resp.json()) as any;
+
+          if (!data.ok) {
+            if (data.error === "invalid_auth" || data.error === "token_revoked") {
+              return { error: "Slack token expired or revoked. Ask the user to run /slack-auth again." };
+            }
+            return { error: `Slack search failed: ${data.error}` };
+          }
+
+          const matches = data.messages?.matches ?? [];
+          return {
+            total: data.messages?.total ?? 0,
+            results: matches.map((m: any) => ({
+              text: m.text,
+              user: m.user ?? m.username,
+              channel: m.channel?.name,
+              channelId: m.channel?.id,
+              ts: m.ts,
+              threadTs: m.thread_ts,
+              permalink: m.permalink,
+            })),
+          };
+        } catch (err: any) {
+          return { error: `Search request failed: ${err.message}` };
+        }
       },
     }),
   };

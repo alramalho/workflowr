@@ -19,6 +19,14 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS slack_tokens (
+    slack_user_id TEXT PRIMARY KEY,
+    access_token  TEXT NOT NULL,
+    connected_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT NOT NULL,

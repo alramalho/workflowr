@@ -92,7 +92,8 @@ function getSystemPrompt() {
   - No headings (no #, ##, ###). Use *BOLD SECTION TITLES* instead.
   - Lists: use • or numbered lists, not -
   - Code: \`inline\` or \`\`\`block\`\`\`
-  - Never use standard markdown syntax. It will render broken in Slack.
+  - Tables: use standard markdown table syntax (| header | ... | with --- separator row). They will be auto-converted to native Slack tables.
+  - Never use other standard markdown syntax. It will render broken in Slack.
   - Never use ✅ or checkmark emojis for items that aren't completed. Use • for lists. Keep emoji usage minimal — only where it genuinely adds clarity.
   - For links, use descriptive text instead of IDs. e.g. <https://linear.app/...|move all to helicone> instead of <https://linear.app/...|CHA-5335>.
 `;

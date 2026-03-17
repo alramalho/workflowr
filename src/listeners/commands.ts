@@ -2,6 +2,7 @@ import type { App } from "@slack/bolt";
 import { google } from "googleapis";
 import { config } from "../config.js";
 import { getToken, deleteToken } from "../db/tokens.js";
+import { getSlackToken, deleteSlackToken } from "../db/slack-tokens.js";
 import { sendWeeklyReport } from "../jobs/weekly-report.js";
 import * as sm from "../integrations/supermemory.js";
 import { buildMemoryBlocks, buildTaskBlocks } from "./actions.js";
@@ -79,6 +80,65 @@ export function registerCommands(app: App) {
       channel: command.channel_id,
       user: command.user_id,
       text: "Google account disconnected.",
+    });
+  });
+
+  app.command("/slack-auth", async ({ command, ack }) => {
+    await ack();
+
+    if (!config.slack.clientId || !config.slack.clientSecret || !config.slack.redirectUri) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Slack user OAuth is not configured on this bot.",
+      });
+      return;
+    }
+
+    const existing = getSlackToken(command.user_id);
+    if (existing) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You already have a Slack user token connected. Use `/slack-disconnect` first to reconnect.",
+      });
+      return;
+    }
+
+    const params = new URLSearchParams({
+      client_id: config.slack.clientId,
+      user_scope: "search:read",
+      redirect_uri: config.slack.redirectUri,
+      state: command.user_id,
+    });
+
+    const authUrl = `https://slack.com/oauth/v2/authorize?${params}`;
+
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: `<${authUrl}|Click here to connect your Slack account for search>`,
+    });
+  });
+
+  app.command("/slack-disconnect", async ({ command, ack }) => {
+    await ack();
+
+    const existing = getSlackToken(command.user_id);
+    if (!existing) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "No Slack user token connected.",
+      });
+      return;
+    }
+
+    deleteSlackToken(command.user_id);
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: "Slack user token disconnected.",
     });
   });
 

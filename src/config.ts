@@ -15,6 +15,9 @@ export const config = {
     botToken: env("SLACK_BOT_TOKEN"),
     signingSecret: env("SLACK_SIGNING_SECRET"),
     appToken: env("SLACK_APP_TOKEN"),
+    clientId: optionalEnv("SLACK_CLIENT_ID"),
+    clientSecret: optionalEnv("SLACK_CLIENT_SECRET"),
+    redirectUri: optionalEnv("SLACK_REDIRECT_URI"),
   },
   github: {
     token: env("GITHUB_TOKEN"),

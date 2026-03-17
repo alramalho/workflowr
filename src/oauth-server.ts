@@ -3,6 +3,7 @@ import express from "express";
 import { google } from "googleapis";
 import { config } from "./config.js";
 import { upsertToken } from "./db/tokens.js";
+import { upsertSlackToken } from "./db/slack-tokens.js";
 import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { getAllOrgMembers } from "./db/org-members.js";
 import { clearThreadLocks } from "./db/thread-reads.js";
@@ -104,6 +105,50 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
         });
       }
     });
+  });
+
+  app.get("/auth/slack/callback", async (req, res) => {
+    const code = req.query.code as string | undefined;
+    const state = req.query.state as string | undefined;
+
+    if (!code || !state) {
+      res.status(400).send("Missing code or state parameter.");
+      return;
+    }
+
+    try {
+      const resp = await fetch("https://slack.com/api/oauth.v2.access", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: config.slack.clientId!,
+          client_secret: config.slack.clientSecret!,
+          code,
+          redirect_uri: config.slack.redirectUri!,
+        }),
+      });
+
+      const data = await resp.json() as any;
+
+      if (!data.ok) {
+        console.error("Slack OAuth error:", data.error);
+        res.status(400).send(`Slack OAuth failed: ${data.error}`);
+        return;
+      }
+
+      const userToken = data.authed_user?.access_token;
+      if (!userToken) {
+        res.status(400).send("No user access token received.");
+        return;
+      }
+
+      upsertSlackToken(state, userToken);
+
+      res.send("Slack account connected for search! You can close this tab and return to Slack.");
+    } catch (err) {
+      console.error("Slack OAuth callback error:", err);
+      res.status(500).send("Failed to connect Slack account. Please try again.");
+    }
   });
 
   app.get("/auth/google/callback", async (req, res) => {
