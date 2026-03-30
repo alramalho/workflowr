@@ -11,4 +11,12 @@ major features:
 
 - [] always aware: dont wait for triggering, but progressively build KB for org
     - get auto triggered when CONFUSION is sensed in a thread. (like people asking for context, seemingly not getting each other: tough one to do, rather under trigger then overtrigger), not just direct mentions.
-    
+
+
+general capability:
+- should be aware of what people are saying /doing, particularly
+    - keeping an internal 'tree of issues'
+        - what are people doing
+        - relations between issues (we can just use vector similarity, but we should then standardize wording)
+            : example use case: "What issues about wrong agent v5 instructions were concluded in the last 3 days?"
+                - envolve complex searching too

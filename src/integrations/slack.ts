@@ -122,15 +122,30 @@ export async function listChannelCanvases(
     });
     const bookmarks = (res as any).bookmarks ?? [];
     for (const b of bookmarks) {
-      if (b.file_id) {
-        canvases.push({ canvasId: b.file_id, title: b.title ?? "(untitled)", source: "bookmark" });
+      const id = b.file_id ?? b.entity_id;
+      if (id) {
+        canvases.push({ canvasId: id, title: b.title ?? "(untitled)", source: "bookmark" });
       }
     }
   } catch (e: any) {
     errors.push(`bookmarks.list failed: ${e.data?.error ?? e.message}`);
   }
 
-  // 3. List canvas files in channel (catches canvas tabs created via conversations.canvases.create)
+  // 3. Check pinned items
+  try {
+    const res = await app.client.pins.list({ channel: channelId });
+    const existingIds = new Set(canvases.map(c => c.canvasId));
+    for (const item of (res as any).items ?? []) {
+      const f = item.file;
+      if (f?.id && f?.filetype === "canvas" && !existingIds.has(f.id)) {
+        canvases.push({ canvasId: f.id, title: f.title ?? f.name ?? "(untitled)", source: "pin" });
+      }
+    }
+  } catch (e: any) {
+    errors.push(`pins.list failed: ${e.data?.error ?? e.message}`);
+  }
+
+  // 4. List canvas files in channel (catches canvas tabs created via conversations.canvases.create)
   try {
     const res = await app.client.apiCall("files.list", {
       channel: channelId,

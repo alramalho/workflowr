@@ -57,3 +57,10 @@ export function getBotCallByMessageTs(channelId: string, messageTs: string): Bot
   if (!row) return undefined;
   return { ...row, tool_calls: JSON.parse(row.tool_calls) };
 }
+
+export function getThreadBotCalls(channelId: string, threadTs: string, limit = 5): BotCall[] {
+  const rows = db.prepare(
+    `SELECT * FROM bot_calls WHERE channel_id = ? AND thread_ts = ? ORDER BY id DESC LIMIT ?`,
+  ).all(channelId, threadTs, limit) as any[];
+  return rows.map((r) => ({ ...r, tool_calls: JSON.parse(r.tool_calls) }));
+}

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/app.ts",
+    "dev": "concurrently -n app,tunnel -c blue,green \"tsx watch src/app.ts\" \"lt --port 3847 --subdomain chatarmin-workflowr\"",
     "build": "tsc",
     "start": "node dist/app.js"
   },
@@ -14,19 +14,24 @@
     ]
   },
   "dependencies": {
+    "@ai-sdk/gateway": "^3.0.83",
+    "@ai-sdk/provider": "^3.0.8",
     "@helicone/ai-sdk-provider": "^1.0.12",
     "@linear/sdk": "^76.0.0",
+    "@notionhq/client": "^5.14.0",
+    "@openrouter/ai-sdk-provider": "^2.3.3",
     "@slack/bolt": "^4.6.0",
     "@supermemory/tools": "^1.4.0",
     "ai": "^6.0.105",
     "better-sqlite3": "^12.6.2",
+    "bullmq": "^5.71.0",
     "dedent": "^1.7.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "googleapis": "^171.4.0",
+    "ioredis": "5.9.3",
     "node-cron": "^4.2.1",
     "octokit": "^5.0.5",
-    "openai": "^6.25.0",
     "pg": "^8.20.0",
     "supermemory": "^4.15.0",
     "zod": "^4.3.6"
@@ -37,6 +42,8 @@
     "@types/node": "^25.3.2",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.18.0",
+    "concurrently": "^9.2.1",
+    "localtunnel": "^2.0.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }

@@ -4,6 +4,7 @@ export interface Team {
   id: number;
   org_id: number;
   name: string;
+  tools: string | null;
 }
 
 export interface TeamMember {
@@ -51,6 +52,14 @@ export function removeMemberFromTeam(teamId: number, orgMemberId: number): void 
   db.prepare(
     `DELETE FROM team_members WHERE team_id = ? AND org_member_id = ?`,
   ).run(teamId, orgMemberId);
+}
+
+export function getTeamByName(orgId: number, name: string): Team | undefined {
+  return db.prepare(`SELECT * FROM teams WHERE org_id = ? AND name = ? COLLATE NOCASE`).get(orgId, name) as Team | undefined;
+}
+
+export function updateTeamTools(teamId: number, tools: string[]): void {
+  db.prepare(`UPDATE teams SET tools = ? WHERE id = ?`).run(JSON.stringify(tools), teamId);
 }
 
 export function setMemberTeams(orgMemberId: number, orgId: number, teamNames: string[]): void {

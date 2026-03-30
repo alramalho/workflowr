@@ -1,18 +1,14 @@
-import { generateObject } from "ai";
+import { generateObject } from "../utils/ai.js";
 import { z } from "zod";
-import { createHelicone } from "@helicone/ai-sdk-provider";
 import dedent from "dedent";
-import { config } from "../config.js";
 
 export async function hasExplicitConfirmation(conversationHistory: string, action: string): Promise<{ confirmed: boolean; reason: string }> {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone("gemini-3-flash-preview");
 
   const lines = conversationHistory.split("\n");
   const capped = lines.slice(-15).join("\n");
 
   const result = await generateObject({
-    model,
+    model: "google/gemini-3-flash-preview",
     schema: z.object({
       confirmed: z.boolean(),
       reason: z.string(),

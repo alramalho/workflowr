@@ -1,7 +1,5 @@
 import type { App } from "@slack/bolt";
-import { generateText } from "ai";
-import { createHelicone } from "@helicone/ai-sdk-provider";
-import OpenAI from "openai";
+import { generateText } from "../utils/ai.js";
 import dedent from "dedent";
 import { config } from "../config.js";
 import { getThreadReplies } from "./slack.js";
@@ -10,68 +8,70 @@ import { getThreadReplies } from "./slack.js";
 const translationHistory = new Map<string, string>();
 
 export async function downloadSlackImage(url: string): Promise<Buffer> {
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${config.slack.botToken}` },
-    redirect: "manual",
-  });
-  // Slack may redirect — follow with the same auth header
-  if (res.status >= 300 && res.status < 400) {
-    const location = res.headers.get("location");
-    if (location) {
-      const res2 = await fetch(location, {
-        headers: { Authorization: `Bearer ${config.slack.botToken}` },
-      });
-      if (!res2.ok) throw new Error(`Failed to download image (redirect): ${res2.status}`);
-      return Buffer.from(await res2.arrayBuffer());
+  const headers = { Authorization: `Bearer ${config.slack.botToken}` };
+  let currentUrl = url;
+
+  // Follow up to 5 redirects manually so we can keep the auth header
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(currentUrl, { headers, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error(`Redirect ${res.status} with no location header`);
+      currentUrl = location;
+      continue;
     }
+    if (!res.ok) throw new Error(`Failed to download image: ${res.status} from ${currentUrl}`);
+    return Buffer.from(await res.arrayBuffer());
   }
-  if (!res.ok) throw new Error(`Failed to download image: ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  throw new Error(`Too many redirects downloading image: ${url}`);
 }
 
-const openai = new OpenAI();
-
-async function describeImage(url: string, mimetype: string): Promise<string | null> {
+async function describeImage(url: string, mimetype: string, messageContext: string, retries = 1): Promise<string | null> {
   try {
     if (!SUPPORTED_IMAGE_TYPES.has(mimetype)) return null;
     const buffer = await downloadSlackImage(url);
-    const base64 = buffer.toString("base64");
-    const response = await openai.responses.create({
-      model: "gpt-4.1-nano",
-      input: [
+    const response = await generateText({
+      model: "google/gemini-3-flash-preview",
+      messages: [
         {
           role: "user",
           content: [
             {
-              type: "input_text",
-              text: "Extract and translate any text visible in this image into English. If the text is already in English, just restate it. Output ONLY the translated text, nothing else. No intro, no outro. If there is no readable text in the image, respond with exactly: NO_TEXT",
+              type: "text",
+              text: `The user sent this message along with the image: "${messageContext}"\n\nDescribe what the image shows in the context of the message. Focus only on what's relevant to the user's point — ignore unrelated UI elements, sidebars, or background content. Translate any non-English text to English. Be concise. If the image has no relevance or readable content, respond with exactly: NO_TEXT`,
             },
             {
-              type: "input_image",
-              image_url: `data:${mimetype};base64,${base64}`,
-              detail: "auto",
+              type: "image",
+              image: buffer,
+              mediaType: mimetype,
             },
           ],
         },
       ],
     });
-    const text = response.output_text?.trim();
+    const text = response.text?.trim();
     if (!text || text === "NO_TEXT") return null;
     return text;
   } catch (e) {
-    console.error("Image description failed:", e);
+    console.error(`Image description failed (url=${url}, mime=${mimetype}, retriesLeft=${retries}):`, e);
+    if (retries > 0) return describeImage(url, mimetype, messageContext, retries - 1);
     return null;
   }
 }
 
 export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-async function processImageFiles(files: any[]): Promise<string> {
+async function processImageFiles(files: any[], messageContext: string): Promise<string> {
   const imgs = files?.filter((f: any) => f.mimetype?.startsWith("image/")) ?? [];
   if (!imgs.length) return "";
   const results = await Promise.all(
     imgs.map(async (f: any) => {
-      const translated = await describeImage(f.url_private, f.mimetype);
+      const url = f.url_private_download ?? f.url_private;
+      if (!url) {
+        console.warn("Image file has no download URL:", JSON.stringify({ id: f.id, name: f.name, mimetype: f.mimetype }));
+        return `[image ${f.mimetype}]`;
+      }
+      const translated = await describeImage(url, f.mimetype, messageContext);
       return translated ? `[image]\n${translated}` : `[image ${f.mimetype}]`;
     }),
   );
@@ -124,13 +124,10 @@ export async function translateMessage(
   const names = messageUser ? await resolveUserNames(app, [messageUser]) : new Map();
   const name = (messageUser && names.get(messageUser)) ?? "Someone";
 
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone("gemini-3-flash-preview");
-
-  const imgText = files?.length ? await processImageFiles(files) : "";
+  const imgText = files?.length ? await processImageFiles(files, messageText) : "";
 
   const result = await generateText({
-    model,
+    model: "google/gemini-3-flash-preview",
     prompt: dedent`
       Translate the following Slack message into English.
       If it's already in English, just restate it clearly.
@@ -175,9 +172,6 @@ export async function translateThread(
   const userIds = [...new Set(messages.map((m) => m.user).filter(Boolean))] as string[];
   const names = await resolveUserNames(app, userIds);
 
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone("gemini-3-flash-preview");
-
   const lines = await Promise.all(messages.map(async (m) => {
     const name = names.get(m.user!) ?? m.user;
     const link = messageLink(teamDomain, channelId, m.ts!, threadTs);
@@ -188,13 +182,13 @@ export async function translateThread(
       year: "numeric",
     });
     const files = (m as any).files as any[] | undefined;
-    const imgText = files?.length ? await processImageFiles(files) : "";
+    const imgText = files?.length ? await processImageFiles(files, m.text ?? "") : "";
     const text = (m.text ?? "") + (imgText ? "\n\n" + imgText : "");
     return { name, text, link, date };
   }));
 
   const result = await generateText({
-    model,
+    model: "google/gemini-3-flash-preview",
     prompt: dedent`
       Translate the following Slack thread messages into English.
       If a message is already in English, keep it as-is.

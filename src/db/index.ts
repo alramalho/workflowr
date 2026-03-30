@@ -98,6 +98,12 @@ if (!orgCols.some((c) => c.name === "linear_id")) {
 if (!orgCols.some((c) => c.name === "is_external")) {
   db.exec(`ALTER TABLE org_members ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0`);
 }
+if (!orgCols.some((c) => c.name === "problem_to_solve")) {
+  db.exec(`ALTER TABLE org_members ADD COLUMN problem_to_solve TEXT`);
+}
+if (!orgCols.some((c) => c.name === "user_overrides")) {
+  db.exec(`ALTER TABLE org_members ADD COLUMN user_overrides TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS teams (
@@ -107,6 +113,11 @@ db.exec(`
     UNIQUE(org_id, name)
   )
 `);
+
+const teamsTableCols = db.prepare(`PRAGMA table_info(teams)`).all() as Array<{ name: string }>;
+if (!teamsTableCols.some((c) => c.name === "tools")) {
+  db.exec(`ALTER TABLE teams ADD COLUMN tools TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS team_members (
@@ -124,18 +135,6 @@ db.exec(`
     thread_ts    TEXT NOT NULL,
     last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(channel_id, thread_ts)
-  )
-`);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS issue_thread_links (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    issue_identifier TEXT NOT NULL,
-    channel_id       TEXT NOT NULL,
-    thread_ts        TEXT NOT NULL,
-    resolved         INTEGER NOT NULL DEFAULT 0,
-    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(issue_identifier, channel_id, thread_ts)
   )
 `);
 
@@ -237,6 +236,46 @@ db.exec(`
     summary    TEXT,
     content    BLOB NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tool_rules (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name      TEXT NOT NULL,
+    memory_text    TEXT NOT NULL,
+    slack_user_id  TEXT NOT NULL,
+    team_id        TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tool_name, memory_text, slack_user_id)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS usage_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL,
+    user_name        TEXT,
+    team_id          TEXT,
+    invocation_type  TEXT NOT NULL,
+    channel_id       TEXT,
+    thread_ts        TEXT,
+    tool_calls_count INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notion_pages (
+    id          TEXT NOT NULL,
+    team_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    parent_id   TEXT,
+    parent_type TEXT,
+    url         TEXT,
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (id, team_id)
   )
 `);
 

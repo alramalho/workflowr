@@ -1,8 +1,43 @@
-import { tool } from "ai";
+import { tool, generateObject } from "ai";
 import { z } from "zod";
 import * as sm from "../../integrations/supermemory.js";
 import { config } from "../../config.js";
+import { addToolRule } from "../../db/tool-rules.js";
 import type { SubagentContext } from "./types.js";
+
+const TOOL_RULE_CANDIDATES = [
+  "slack_agent",
+  "linear_agent",
+  "github_agent",
+  "google_calendar_agent",
+] as const;
+
+async function classifyToolRules(content: string): Promise<string[]> {
+  try {
+    const result = await generateObject({
+      model: "google/gemini-3-flash-preview",
+      schema: z.object({
+        tools: z.array(z.enum(TOOL_RULE_CANDIDATES)).describe(
+          "Tools this rule/preference should always apply to. Empty if general knowledge.",
+        ),
+      }),
+      prompt: `Does this memory represent a rule or preference that should always be applied when using specific tools?
+
+Memory: ${content}
+
+Tools:
+- slack_agent: Slack operations (channels, threads, messages, canvases, formatting, quoting content)
+- linear_agent: Linear issue management (creating, updating, commenting on issues)
+- github_agent: GitHub operations (PRs, commits, repos)
+- google_calendar_agent: Calendar operations (events, scheduling)
+
+Return the tools this rule applies to. Return empty array if it's general knowledge or a fact (not a behavioral rule).`,
+    });
+    return result.object.tools;
+  } catch {
+    return [];
+  }
+}
 
 export function createMemoryTools(ctx: SubagentContext) {
   const { slackUserId, teamId } = ctx;
@@ -33,9 +68,51 @@ export function createMemoryTools(ctx: SubagentContext) {
       }),
       execute: async ({ content, scope }) => {
         const tag = scope === "user" ? sm.userTag(slackUserId) : teamId ? sm.orgTag(teamId) : sm.userTag(slackUserId);
-        const rephrased = await sm.rephraseMemory(content);
-        await sm.addMemory(rephrased, tag);
-        return { stored: true, scope, content: rephrased };
+        const rephrased = await sm.rephraseMemory(content, teamId);
+
+        const existing = await sm.searchMemories(rephrased, [tag], 3);
+        const candidates = existing
+          .map((r) => ({
+            id: r.documentId,
+            text: r.chunks?.map((c: any) => c.content).join(" ") ?? r.summary ?? r.title ?? "",
+          }))
+          .filter((c) => c.text);
+
+        const { action, memories, deleteIds } = await sm.reconcileMemories(rephrased, candidates);
+
+        if (action === "skip") {
+          return { stored: false, reason: "duplicate", content: rephrased };
+        }
+
+        if (action === "reconcile" && memories?.length) {
+          for (const id of deleteIds ?? []) {
+            await sm.deleteMemory(id);
+          }
+          for (const mem of memories) {
+            await sm.addMemory(mem, tag);
+          }
+        } else {
+          await sm.addMemory(rephrased, tag);
+        }
+
+        // classify and store tool-bound rules
+        const finalMemories = (action === "reconcile" && memories?.length) ? memories : [rephrased];
+        const boundTools: string[] = [];
+        for (const mem of finalMemories) {
+          const tools = await classifyToolRules(mem);
+          for (const t of tools) {
+            addToolRule(t, mem, slackUserId, teamId);
+            if (!boundTools.includes(t)) boundTools.push(t);
+          }
+        }
+
+        const base = action === "reconcile"
+          ? { stored: true, scope, reconciled: true, memories }
+          : { stored: true, scope, content: rephrased };
+
+        return boundTools.length > 0
+          ? { ...base, toolRules: boundTools }
+          : base;
       },
     }),
   };

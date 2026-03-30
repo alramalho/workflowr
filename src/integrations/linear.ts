@@ -192,6 +192,26 @@ export async function listMembers() {
   }));
 }
 
+export async function uploadImage(imageBuffer: Buffer, filename: string, contentType: string): Promise<string> {
+  const payload = await client.fileUpload(contentType, filename, imageBuffer.length, { makePublic: true });
+  const uploadFile = payload.uploadFile;
+  if (!uploadFile) throw new Error("Linear fileUpload returned no upload target");
+
+  const headers: Record<string, string> = {};
+  for (const h of uploadFile.headers) {
+    headers[h.key] = h.value;
+  }
+
+  const res = await fetch(uploadFile.uploadUrl, {
+    method: "PUT",
+    headers: { ...headers, "Content-Type": contentType },
+    body: new Uint8Array(imageBuffer),
+  });
+  if (!res.ok) throw new Error(`Failed to upload to Linear: ${res.status}`);
+
+  return uploadFile.assetUrl;
+}
+
 export async function listStaleIssues(staleDays = 15, limit = 50) {
   const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
   const results = await client.issues({

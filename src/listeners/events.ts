@@ -1,12 +1,14 @@
 import type { App } from "@slack/bolt";
-import { runAgent, shouldRespond } from "../agent/index.js";
-import { getThreadReplies, getChannelHistory } from "../integrations/slack.js";
+import { shouldRespond } from "../agent/index.js";
+import { getThreadReplies } from "../integrations/slack.js";
 import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
 import { getOrgMemberBySlackId } from "../db/org-members.js";
 import { getOrgByTeamId } from "../db/orgs.js";
-import { saveBotCall, updateBotCallMessageTs } from "../db/bot-calls.js";
-import { textToBlocksWithTable } from "../slack-table.js";
 import { getThreadArtifacts } from "../db/artifacts.js";
+import { getThreadBotCalls } from "../db/bot-calls.js";
+import { enqueueAgentJob } from "../queues/agent-queue.js";
+import { getActiveSetup, handleSetupReply } from "../setup-flow.js";
+import { logUsage } from "../db/usage-log.js";
 
 export const ADMIN_USERS: Record<string, string> = {
   "U08PH00GP9Q": "Alex",
@@ -77,6 +79,17 @@ export function registerEvents(app: App) {
     const userId = await getBotUserId(app);
     const isDM = "channel_type" in message && message.channel_type === "im";
     const messageText = ("text" in message && message.text) ? message.text : "";
+
+    // intercept DM replies during active conversational flows
+    if (isDM && messageText) {
+      const activeSetup = getActiveSetup(message.user as string);
+      if (activeSetup) {
+        await handleSetupReply(app, message.user as string, messageText);
+        return;
+      }
+
+    }
+
     const isMentioned = messageText.includes(`<@${userId}>`);
     const threadTs = "thread_ts" in message ? message.thread_ts : undefined;
     const isActiveThread = threadTs && activeThreads.has(threadTs);
@@ -100,25 +113,27 @@ export function registerEvents(app: App) {
       if (attachmentText) userMessage += `\n\n[Attached/quoted message]\n${attachmentText}`;
     }
 
-    // download images from message files
+    // download images and files from message files
     const images: { data: Buffer; mimeType: string }[] = [];
+    const files: { data: Buffer; mimeType: string; name: string }[] = [];
     if ("files" in message && Array.isArray(message.files)) {
-      const imgFiles = message.files.filter((f: any) => SUPPORTED_IMAGE_TYPES.has(f.mimetype));
-      const downloaded = await Promise.all(
-        imgFiles.map(async (f: any) => {
+      await Promise.all(
+        message.files.map(async (f: any) => {
           try {
             const data = await downloadSlackImage(f.url_private);
-            return { data, mimeType: f.mimetype as string };
+            if (SUPPORTED_IMAGE_TYPES.has(f.mimetype)) {
+              images.push({ data, mimeType: f.mimetype });
+            } else if (f.mimetype === "application/pdf") {
+              files.push({ data, mimeType: f.mimetype, name: f.name });
+            }
           } catch (e) {
-            console.error("Failed to download image:", e);
-            return null;
+            console.error(`Failed to download file ${f.name}:`, e);
           }
         }),
       );
-      images.push(...downloaded.filter((d): d is NonNullable<typeof d> => d !== null));
     }
 
-    if (!userMessage && !images.length) return;
+    if (!userMessage && !images.length && !files.length) return;
 
     const channel = message.channel;
 
@@ -140,11 +155,35 @@ export function registerEvents(app: App) {
       try { await app.client.conversations.join({ channel }); } catch {}
       if (threadTs) {
         const replies = await getThreadReplies(app, channel, threadTs);
-        const threadContext = replies
-          .filter((m) => m.ts !== message.ts)
-          .map((m) => `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`)
+        const otherMessages = replies.filter((m) => m.ts !== message.ts);
+        const threadContext = otherMessages
+          .map((m) => {
+            let line = `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`;
+            if ((m as any).files && Array.isArray((m as any).files)) {
+              const imgs = (m as any).files
+                .filter((f: any) => SUPPORTED_IMAGE_TYPES.has(f.mimetype))
+                .map((f: any) => `[image: ${f.name}]`);
+              if (imgs.length) line += ` ${imgs.join(" ")}`;
+            }
+            return line;
+          })
           .join("\n");
         if (threadContext) context = `Thread context:\n${threadContext}`;
+
+        // download images from thread context messages so the model can actually see them
+        const threadImageFiles = otherMessages.flatMap((m) =>
+          ((m as any).files ?? []).filter((f: any) => SUPPORTED_IMAGE_TYPES.has(f.mimetype))
+        );
+        await Promise.all(
+          threadImageFiles.map(async (f: any) => {
+            try {
+              const data = await downloadSlackImage(f.url_private);
+              images.push({ data, mimeType: f.mimetype });
+            } catch (e) {
+              console.error(`Failed to download thread image ${f.name}:`, e);
+            }
+          }),
+        );
       }
     } catch (e) {
       console.error("Failed to fetch thread/channel context:", e);
@@ -156,6 +195,24 @@ export function registerEvents(app: App) {
         `• artifact:${a.id} — ${a.filename} (${a.mime_type})${a.summary ? ` — "${a.summary}"` : ""}`
       );
       context += `\n\nPreviously created artifacts in this thread (can be referenced by artifactId for re-upload without re-querying):\n${artifactLines.join("\n")}`;
+    }
+
+    // inject previous tool call results so follow-ups can reference sources without re-searching
+    const previousCalls = getThreadBotCalls(channel, replyTs, 3);
+    if (previousCalls.length > 0) {
+      const toolSummaries = previousCalls.reverse().map((call) => {
+        const toolLines = call.tool_calls
+          .filter((tc) => tc.name !== "confidence_check")
+          .map((tc) => {
+            const output = typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output);
+            const truncated = output.length > 500 ? output.slice(0, 500) + "…" : output;
+            return `  • ${tc.name}: ${truncated}`;
+          });
+        return toolLines.length > 0 ? `[response to "${call.prompt.slice(0, 80)}"]\n${toolLines.join("\n")}` : null;
+      }).filter(Boolean);
+      if (toolSummaries.length > 0) {
+        context += `\n\nYour previous tool results in this thread (use these to answer follow-ups about sources — do NOT re-search):\n${toolSummaries.join("\n\n")}`;
+      }
     }
 
     // gate: in active threads (without explicit mention), check if we should respond
@@ -180,38 +237,30 @@ export function registerEvents(app: App) {
     const statusThreadTs = threadTs ?? message.ts;
     await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "is thinking...", loading_messages: ["is thinking..."] });
 
-    try {
-      const senderName = ALLOWED_USERS[message.user as string];
-      const result = await runAgent(app, userMessage, context || undefined, message.user, teamId, senderName, images.length ? images : undefined, channel, threadTs ?? message.ts, (status) => {
-        app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status, loading_messages: [status] }).catch(() => {});
-      });
-      await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "" });
-      const responseText = result.text || "I couldn't generate a response.";
-      const tableResult = textToBlocksWithTable(responseText);
-      const reply = await say({
-        text: responseText,
-        thread_ts: replyTs,
-        ...(tableResult && { blocks: tableResult.blocks }),
-      });
-
-      const callId = saveBotCall({
-        callerId: message.user as string,
-        channelId: channel,
-        threadTs: replyTs,
-        prompt: userMessage,
-        response: result.text,
-        toolCalls: result.toolCalls,
-        latencyMs: result.latencyMs,
-      });
-      if (reply.ts) updateBotCallMessageTs(callId, reply.ts);
-    } catch (error) {
-      console.error("Agent error:", error);
-      await app.client.assistant.threads.setStatus({ channel_id: channel, thread_ts: statusThreadTs, status: "" }).catch(() => {});
-      await say({
-        text: "Sorry, something went wrong while processing your request.",
-        thread_ts: replyTs,
-      });
-    }
+    const senderName = ALLOWED_USERS[message.user as string];
+    const invocationType = isDM ? "dm" : isMentioned ? "mention" : "active_thread";
+    const usageLogId = logUsage({
+      userId: message.user as string,
+      userName: senderName,
+      teamId,
+      invocationType,
+      channelId: channel,
+      threadTs: statusThreadTs,
+    });
+    await enqueueAgentJob({
+      prompt: userMessage,
+      context: context || undefined,
+      slackUserId: message.user as string,
+      teamId,
+      senderName,
+      images: images.length ? images.map((i) => ({ data: i.data.toString("base64"), mimeType: i.mimeType })) : undefined,
+      files: files.length ? files.map((f) => ({ data: f.data.toString("base64"), mimeType: f.mimeType, name: f.name })) : undefined,
+      channelId: channel,
+      threadTs: statusThreadTs,
+      replyTs,
+      messageTs: message.ts,
+      usageLogId,
+    });
   });
 
   // Alex can delete bot messages by reacting with :x:

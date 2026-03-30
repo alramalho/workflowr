@@ -2,13 +2,12 @@ import type { App } from "@slack/bolt";
 import cron from "node-cron";
 import { getActivecronSteps, getTaskForStep, updateTaskStep } from "../db/tasks.js";
 import { runAgent } from "../agent/index.js";
-import { registerJobHandler } from "./job-runner.js";
-import { scheduleJob } from "../db/delayed-jobs.js";
+import { registerDelayedJobHandler, scheduleDelayedJob } from "../queues/delayed-jobs-queue.js";
 
 const activeCrons = new Map<number, ReturnType<typeof cron.schedule>>();
 
 export function setupTaskStepExecutor(app: App) {
-  registerJobHandler("task_step_execute", async (_app, payload) => {
+  registerDelayedJobHandler("task_step_execute", async (_app, payload) => {
     const { stepId } = payload as { stepId: number };
     await executeStep(app, stepId);
   });
@@ -40,7 +39,7 @@ function syncCronSteps(app: App) {
 
     const scheduled = cron.schedule(step.schedule, () => {
       const key = `task_step_${step.id}_${Date.now()}`;
-      scheduleJob("task_step_execute", key, { stepId: step.id }, new Date());
+      scheduleDelayedJob("task_step_execute", key, { stepId: step.id }, new Date());
     });
 
     activeCrons.set(step.id, scheduled);

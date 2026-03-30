@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as linear from "../../integrations/linear.js";
 import { hasExplicitConfirmation } from "../confirmation.js";
 import { getAllOrgMembers, updateOrgMember } from "../../db/org-members.js";
+import { downloadSlackImage } from "../../integrations/translate.js";
 import type { SubagentContext } from "./types.js";
 
 export function createLinearTools(ctx: SubagentContext) {
@@ -144,6 +145,19 @@ export function createLinearTools(ctx: SubagentContext) {
           console.error("Linear→Slack email sync failed:", e);
         }
         return members;
+      },
+    }),
+    linear_upload_slack_image: tool({
+      description: "Download an image from Slack and upload it to Linear. Returns a Linear-hosted URL for embedding in issue descriptions as markdown: ![alt](url). Use the slack_url from thread context file annotations.",
+      inputSchema: z.object({
+        slackUrl: z.string().describe("Slack url_private for the image"),
+        filename: z.string().describe("Original filename"),
+        mimeType: z.string().describe("MIME type (e.g. image/png, image/jpeg)"),
+      }),
+      execute: async ({ slackUrl, filename, mimeType }) => {
+        const imageData = await downloadSlackImage(slackUrl);
+        const assetUrl = await linear.uploadImage(imageData, filename, mimeType);
+        return { assetUrl, markdown: `![${filename}](${assetUrl})` };
       },
     }),
   };

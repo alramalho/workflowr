@@ -19,6 +19,10 @@ import {
   type TaskStep,
 } from "../db/tasks.js";
 import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
+import { logUsage } from "../db/usage-log.js";
+
+// In-memory history for ask_workflowr so consecutive asks on the same thread retain context
+const askHistory = new Map<string, { role: "user" | "assistant"; text: string }[]>();
 
 interface Memory {
   id: string;
@@ -276,12 +280,25 @@ export function registerActions(app: App) {
       blocks.push({ type: "divider" });
       for (const tc of call.tool_calls) {
         const inputStr = truncate(JSON.stringify(tc.input, null, 2), 2500);
-        const outputStr = truncate(JSON.stringify(tc.output, null, 2), 2500);
+        const output = tc.output as any;
+        const hasInternals = output && typeof output === "object" && Array.isArray(output.internals) && output.internals.length > 0;
+        const displayOutput = hasInternals ? output.answer ?? output : tc.output;
+        const outputStr = truncate(typeof displayOutput === "string" ? displayOutput : JSON.stringify(displayOutput, null, 2), 2500);
+
+        let internalsStr = "";
+        if (hasInternals) {
+          const lines = output.internals.map((i: any) => {
+            const args = typeof i.args === "string" ? i.args : JSON.stringify(i.args);
+            return `  ${i.tool}(${truncate(args, 200)})`;
+          });
+          internalsStr = `\n_Internals (${output.internals.length} sub-calls):_\n\`\`\`${lines.join("\n")}\`\`\``;
+        }
+
         blocks.push({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `*${tc.name}*\n\`\`\`${inputStr}\`\`\`\n_Output:_\n\`\`\`${outputStr}\`\`\``,
+            text: `*${tc.name}*\n\`\`\`${inputStr}\`\`\`\n_Output:_\n\`\`\`${outputStr}\`\`\`${internalsStr}`,
           },
         });
       }
@@ -303,6 +320,14 @@ export function registerActions(app: App) {
     if (shortcut.type !== "message_action") return;
 
     const { channel, message, user } = shortcut;
+    logUsage({
+      userId: user.id,
+      userName: ALLOWED_USERS[user.id],
+      teamId: shortcut.team?.id,
+      invocationType: "shortcut:translate_thread",
+      channelId: channel.id,
+      threadTs: (message as any).thread_ts ?? message.ts,
+    });
     const teamDomain = shortcut.team?.domain ?? "slack";
     const threadTs = (message as any).thread_ts;
     const isReply = threadTs && threadTs !== message.ts;
@@ -402,11 +427,20 @@ export function registerActions(app: App) {
       return;
     }
 
+    logUsage({
+      userId,
+      userName: senderName,
+      teamId,
+      invocationType: "shortcut:ask_workflowr",
+      channelId: channel_id,
+      threadTs: thread_ts,
+    });
+
     await client.chat.postEphemeral({
       channel: channel_id,
       user: userId,
       thread_ts,
-      text: "_thinking..._",
+      text: `> ${instruction}\n\n_thinking..._`,
     });
 
     try {
@@ -420,6 +454,18 @@ export function registerActions(app: App) {
         context = `Thread context:\n${replies.map((m) => `${label(m)}: ${m.text}`).join("\n")}`;
       }
 
+      // Include prior ask_workflowr exchanges on this thread
+      const historyKey = `${channel_id}:${thread_ts}`;
+      const priorExchanges = askHistory.get(historyKey) ?? [];
+      if (priorExchanges.length > 0) {
+        const exchangeText = priorExchanges
+          .map((e) => `${e.role === "user" ? "User asked" : "Workflowr answered"}: ${e.text}`)
+          .join("\n");
+        context = context
+          ? `${context}\n\nPrevious ask-workflowr exchanges on this thread:\n${exchangeText}`
+          : `Previous ask-workflowr exchanges on this thread:\n${exchangeText}`;
+      }
+
       const result = await runAgent(
         app,
         instruction,
@@ -431,6 +477,11 @@ export function registerActions(app: App) {
         channel_id,
         thread_ts,
       );
+
+      // Store this exchange in history
+      priorExchanges.push({ role: "user", text: instruction });
+      priorExchanges.push({ role: "assistant", text: result.text || "" });
+      askHistory.set(historyKey, priorExchanges);
 
       saveBotCall({
         callerId: userId,

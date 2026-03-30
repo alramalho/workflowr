@@ -1,9 +1,8 @@
 import type { App } from "@slack/bolt";
-import { generateObject } from "ai";
+import { generateObject } from "../utils/ai.js";
 import { z } from "zod";
-import { createHelicone } from "@helicone/ai-sdk-provider";
 import dedent from "dedent";
-import { config } from "../config.js";
+import { withRetry } from "../utils/retry.js";
 import { getThreadReplies } from "../integrations/slack.js";
 import { isThreadLocked, markThreadRead } from "../db/thread-reads.js";
 import {
@@ -46,7 +45,7 @@ async function resolveSlackUser(app: App, slackId: string): Promise<{ name: stri
   }
 }
 
-async function ensureOrgMember(
+export async function ensureOrgMember(
   app: App,
   slackId: string,
   teamId?: string,
@@ -80,12 +79,6 @@ async function ensureOrgMember(
 export async function enrichOrgFromUrl(
   url: string,
 ): Promise<{ name: string; description: string; industry: string; location: string }> {
-  const helicone = createHelicone({
-    apiKey: config.ai.heliconeApiKey,
-    headers: { "Helicone-Property-App": "workflowr" },
-  });
-  const model = helicone("gemini-3-flash-preview");
-
   // normalize URL and fetch page content
   const fullUrl = url.startsWith("http") ? url : `https://${url}`;
   let pageText = "";
@@ -108,30 +101,32 @@ export async function enrichOrgFromUrl(
     pageText = `(Could not fetch page content for ${url})`;
   }
 
-  const result = await generateObject({
-    model,
-    schema: z.object({
-      name: z.string().describe("Company name"),
-      description: z.string().describe("1-2 sentences about what the company does"),
-      industry: z.string().describe("Industry or domain"),
-      location: z.string().describe("HQ city and country"),
+  const result = await withRetry(() =>
+    generateObject({
+      model: "google/gemini-3-flash-preview",
+      schema: z.object({
+        name: z.string().describe("Company name"),
+        description: z.string().describe("1-2 sentences about what the company does"),
+        industry: z.string().describe("Industry or domain"),
+        location: z.string().describe("HQ city and country"),
+      }),
+      prompt: dedent`
+        Extract basic company information from this website content.
+        URL: ${url}
+
+        Page content:
+        ${pageText}
+
+        Extract:
+        - name: The company name
+        - description: What the company does in 1-2 sentences
+        - industry: The industry or domain they operate in (e.g. "e-commerce messaging", "fintech", "SaaS")
+        - location: HQ city and country (e.g. "Vienna, Austria"). If unclear, use "Unknown"
+
+        Be concise. Do not guess — if information is not available, use "Unknown".
+      `,
     }),
-    prompt: dedent`
-      Extract basic company information from this website content.
-      URL: ${url}
-
-      Page content:
-      ${pageText}
-
-      Extract:
-      - name: The company name
-      - description: What the company does in 1-2 sentences
-      - industry: The industry or domain they operate in (e.g. "e-commerce messaging", "fintech", "SaaS")
-      - location: HQ city and country (e.g. "Vienna, Austria"). If unclear, use "Unknown"
-
-      Be concise. Do not guess — if information is not available, use "Unknown".
-    `,
-  });
+  );
 
   return result.object;
 }
@@ -161,15 +156,19 @@ export function buildOrgChart(slackTeamId: string): string {
       );
       const lead = teamMembers.find((m) => reportedToIds.has(m.slack_id));
 
-      lines.push(`*${team.name}*`);
+      const tools = team.tools ? JSON.parse(team.tools) as string[] : [];
+      const toolsStr = tools.length > 0 ? ` [${tools.join(", ")}]` : "";
+      lines.push(`*${team.name}*${toolsStr}`);
       if (lead) {
         const leadsManager = lead.reports_to ? memberById.get(lead.reports_to) : undefined;
         const reportsStr = leadsManager ? ` → reports to ${leadsManager.name}` : "";
         lines.push(`  Lead: ${lead.name}${lead.role ? ` — ${lead.role}` : ""}${reportsStr}`);
+        if (lead.problem_to_solve) lines.push(`    solving: ${lead.problem_to_solve}`);
       }
       for (const m of teamMembers) {
         if (m === lead) continue;
         lines.push(`  • ${m.name}${m.role ? ` — ${m.role}` : ""}`);
+        if (m.problem_to_solve) lines.push(`    solving: ${m.problem_to_solve}`);
       }
       lines.push("");
     }
@@ -202,25 +201,20 @@ export async function editOrgFromInstruction(
   org: Org,
   instruction: string,
 ): Promise<{ name: string; description: string; industry: string; location: string }> {
-  const helicone = createHelicone({
-    apiKey: config.ai.heliconeApiKey,
-    headers: { "Helicone-Property-App": "workflowr" },
-  });
-  const model = helicone("gemini-3-flash-preview");
+  const result = await withRetry(() =>
+    generateObject({
+      model: "google/gemini-3-flash-preview",
+      schema: z.object({
+        name: z.string(),
+        description: z.string(),
+        industry: z.string(),
+        location: z.string(),
+      }),
+      prompt: dedent`
+        Update the organization profile based on the user's instruction.
+        Only change the fields the user is asking to change. Keep everything else as-is.
 
-  const result = await generateObject({
-    model,
-    schema: z.object({
-      name: z.string(),
-      description: z.string(),
-      industry: z.string(),
-      location: z.string(),
-    }),
-    prompt: dedent`
-      Update the organization profile based on the user's instruction.
-      Only change the fields the user is asking to change. Keep everything else as-is.
-
-      Current profile:
+        Current profile:
       - Name: ${org.name}
       - Description: ${org.description ?? "Unknown"}
       - Industry: ${org.industry ?? "Unknown"}
@@ -230,7 +224,8 @@ export async function editOrgFromInstruction(
 
       Return the full updated profile (all 4 fields), with only the relevant ones changed.
     `,
-  });
+    }),
+  );
 
   return result.object;
 }
@@ -250,12 +245,6 @@ async function extractOrgSignals(
     teams?: string[];
   }>
 > {
-  const helicone = createHelicone({
-    apiKey: config.ai.heliconeApiKey,
-    headers: { "Helicone-Property-App": "workflowr" },
-  });
-  const model = helicone("gemini-3-flash-preview");
-
   const profilesContext =
     existingMembers.length > 0
       ? existingMembers
@@ -263,7 +252,9 @@ async function extractOrgSignals(
             (m) => {
               const memberTeams = getTeamsForMember(m.id);
               const teamsStr = memberTeams.length > 0 ? memberTeams.map((t) => t.name).join(", ") : "unknown";
-              return `• ${m.name} (${m.slack_id}): role=${m.role ?? "unknown"}, teams=${teamsStr}, reportsTo=${m.reports_to ?? "unknown"}, writingStyle=${m.writing_style ?? "unknown"}, isExternal=${m.is_external ? "yes" : "no"}, representativeExampleMessage=${m.representative_example_message ?? "unknown"}`;
+              const style = (m.writing_style ?? "unknown").slice(0, 200);
+              const example = (m.representative_example_message ?? "unknown").slice(0, 200);
+              return `• ${m.name} (${m.slack_id}): role=${m.role ?? "unknown"}, teams=${teamsStr}, reportsTo=${m.reports_to ?? "unknown"}, writingStyle=${style}, isExternal=${m.is_external ? "yes" : "no"}, representativeExampleMessage=${example}`;
             },
           )
           .join("\n")
@@ -276,22 +267,23 @@ async function extractOrgSignals(
     ? `\nKnown teams: ${existingTeams.join(", ")}`
     : "";
 
-  const result = await generateObject({
-    model,
-    schema: z.object({
-      members: z.array(
-        z.object({
-          slackId: z.string(),
-          role: z.string().optional(),
-          reportsTo: z.string().optional(),
-          writingStyle: z.string().optional(),
-          representativeExampleMessage: z.string().optional(),
-          isExternal: z.boolean().optional(),
-          teams: z.array(z.string()).optional(),
-        }),
-      ),
-    }),
-    prompt: dedent`
+  const result = await withRetry(() =>
+    generateObject({
+      model: "google/gemini-3-flash-preview",
+      schema: z.object({
+        members: z.array(
+          z.object({
+            slackId: z.string(),
+            role: z.string().optional(),
+            reportsTo: z.string().optional(),
+            writingStyle: z.string().optional(),
+            representativeExampleMessage: z.string().optional(),
+            isExternal: z.boolean().optional(),
+            teams: z.array(z.string()).optional(),
+          }),
+        ),
+      }),
+      prompt: dedent`
       You are incrementally building organizational profiles from Slack threads.
       Your job is to REFINE and ADD to existing profiles, not replace them.
       Only report findings you have genuine signal for from THIS thread. Do not guess.
@@ -341,15 +333,18 @@ async function extractOrgSignals(
       - For reportsTo, use the slack_id (format: U followed by alphanumeric), not the name
       - Return an empty members array if no new insights were found
     `,
-  });
+    }),
+  );
 
   const inputTokens = result.usage.inputTokens ?? 0;
   const outputTokens = result.usage.outputTokens ?? 0;
+  const reasoningTokens = (result.usage as any).outputTokenDetails?.reasoningTokens ?? (result.usage as any).reasoningTokens ?? 0;
+  const textTokens = outputTokens - reasoningTokens;
   const cost =
     (inputTokens * INPUT_PRICE_PER_M + outputTokens * OUTPUT_PRICE_PER_M) /
     1_000_000;
   console.log(
-    `[org-awareness] Gemini Flash: ${inputTokens} in / ${outputTokens} out — $${cost.toFixed(5)}`,
+    `[org-awareness] Gemini Flash: ${inputTokens} in / ${textTokens} text out + ${reasoningTokens} thinking out (${outputTokens} total out) — $${cost.toFixed(5)}`,
   );
 
   return result.object.members;
@@ -563,17 +558,19 @@ export async function analyzeThread(
     if (!member) continue;
 
     const fields: Parameters<typeof updateOrgMember>[1] = {};
-    if (update.role) fields.role = update.role;
-    if (update.reportsTo) fields.reportsTo = update.reportsTo;
-    if (update.writingStyle) fields.writingStyle = update.writingStyle;
-    if (update.representativeExampleMessage) fields.representativeExampleMessage = update.representativeExampleMessage;
+    const overrides: Record<string, boolean> = member.user_overrides ? JSON.parse(member.user_overrides) : {};
+
+    if (update.role && !overrides.role) fields.role = update.role;
+    if (update.reportsTo && !overrides.reports_to) fields.reportsTo = update.reportsTo;
+    if (update.writingStyle) fields.writingStyle = update.writingStyle.slice(0, 750);
+    if (update.representativeExampleMessage) fields.representativeExampleMessage = update.representativeExampleMessage.slice(0, 300);
     if (update.isExternal !== undefined) fields.isExternal = update.isExternal;
 
     if (Object.keys(fields).length > 0) {
       updateOrgMember(update.slackId, fields);
     }
 
-    if (update.teams && update.teams.length > 0 && org) {
+    if (update.teams && update.teams.length > 0 && org && !overrides.teams) {
       setMemberTeams(member.id, org.id, update.teams);
     }
   }

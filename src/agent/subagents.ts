@@ -1,5 +1,5 @@
-import { generateText, tool, stepCountIs } from "ai";
-import { createHelicone } from "@helicone/ai-sdk-provider";
+import { tool, stepCountIs } from "ai";
+import { generateText } from "../utils/ai.js";
 import { z } from "zod";
 import dedent from "dedent";
 import { config } from "../config.js";
@@ -12,9 +12,19 @@ import { createMemoryTools } from "./tools/memory.js";
 import { createTaskTools } from "./tools/tasks.js";
 import { createDatabaseTools } from "./tools/database.js";
 import { createClaudeCodeTools } from "./tools/claude-code.js";
+import { createNotionTools } from "./tools/notion.js";
+import { buildNotionTreeText } from "../db/notion-pages.js";
 import * as sm from "../integrations/supermemory.js";
 import { saveArtifact } from "../db/artifacts.js";
+import { getToolRules } from "../db/tool-rules.js";
 import type { SubagentContext } from "./tools/types.js";
+
+function fetchToolRules(toolName: string, ctx: SubagentContext): string | null {
+  if (!ctx.slackUserId) return null;
+  const rules = getToolRules(toolName, ctx.slackUserId);
+  if (rules.length === 0) return null;
+  return `\n\nUser rules for this tool (always apply these):\n${rules.map((r) => `- ${r.memory_text}`).join("\n")}`;
+}
 
 function extractTag(text: string, tag: string): string | null {
   const regex = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, "i");
@@ -22,22 +32,38 @@ function extractTag(text: string, tag: string): string | null {
   return match ? match[1].trim() : null;
 }
 
-const SUBAGENT_MODEL = "gemini-3-flash-preview";
+const SUBAGENT_MODEL = "google/gemini-3-flash-preview";
 
-async function runSubagent(systemPrompt: string, instruction: string, tools: Record<string, any>, stepLimit = 10) {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone(SUBAGENT_MODEL);
+interface SubagentResult {
+  text: string;
+  internals: { tool: string; args: unknown }[];
+}
 
-  const result = await generateText({
-    model,
-    system: systemPrompt,
-    messages: [{ role: "user", content: instruction }],
-    tools,
-    stopWhen: stepCountIs(stepLimit),
-    abortSignal: AbortSignal.timeout(60_000),
-  });
+async function runSubagent(systemPrompt: string, instruction: string, tools: Record<string, any>, stepLimit = 10): Promise<SubagentResult> {
+  const internals: { tool: string; args: unknown }[] = [];
 
-  return result.text;
+  try {
+    const result = await generateText({
+      model: SUBAGENT_MODEL,
+      system: systemPrompt,
+      messages: [{ role: "user", content: instruction }],
+      tools,
+      stopWhen: stepCountIs(stepLimit),
+      abortSignal: AbortSignal.timeout(60_000),
+      onStepFinish({ toolCalls }) {
+        for (const tc of toolCalls) {
+          internals.push({ tool: tc.toolName, args: (tc as any).input ?? (tc as any).args });
+        }
+      },
+    });
+
+    return { text: result.text, internals };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError" || error instanceof Error && error.name === "AbortError") {
+      console.warn(`[subagent] execution aborted (timeout) — instruction: ${instruction.slice(0, 100)}`);
+    }
+    throw error;
+  }
 }
 
 function createLinearAgentTool(ctx: SubagentContext) {
@@ -46,7 +72,8 @@ function createLinearAgentTool(ctx: SubagentContext) {
     inputSchema: z.object({ instruction: z.string().describe("Clear instruction for what to do in Linear") }),
     execute: async ({ instruction }) => {
       const tools = createLinearTools(ctx);
-      return runSubagent(dedent`
+      const rules = fetchToolRules("linear_agent", ctx);
+      const { text, internals } = await runSubagent(dedent`
         You are a Linear issue management agent. Execute Linear operations as instructed.
 
         For READ operations: execute immediately and return results.
@@ -57,6 +84,8 @@ function createLinearAgentTool(ctx: SubagentContext) {
 
         Only execute write operations when you have all necessary details.
       `, instruction, tools);
+      const answer = rules ? text + rules : text;
+      return { answer, internals };
     },
   });
 }
@@ -72,7 +101,8 @@ function createSlackAgentTool(ctx: SubagentContext) {
       if (ctx.threadTs) contextLines.push(`Current thread timestamp: ${ctx.threadTs}`);
       const contextBlock = contextLines.length ? `\n\nConversation context:\n${contextLines.join("\n")}` : "";
 
-      return runSubagent(dedent`
+      const rules = fetchToolRules("slack_agent", ctx);
+      const { text, internals } = await runSubagent(dedent`
         You are a Slack management agent. Handle channel, thread, canvas, and file operations.
 
         For READ operations: execute immediately.
@@ -83,9 +113,12 @@ function createSlackAgentTool(ctx: SubagentContext) {
 
         Before editing a canvas, always look up its sections first.
         Before creating a channel canvas, always list existing canvases first.
+        When looking for canvases in a channel, always call slack_list_channel_canvases first — tab/bookmarked canvases (source: "bookmark") are the most important as they are the team's primary working documents. Prioritize those over canvases found via files_list.
         When uploading files, you can either generate content directly OR reference an artifactId from another agent — the slack_upload_file tool accepts both.
         For file uploads, use the current channel/thread as default — do NOT ask the user for channel or thread IDs.${contextBlock}
       `, instruction, tools);
+      const answer = rules ? text + rules : text;
+      return { answer, internals };
     },
   });
 }
@@ -96,7 +129,8 @@ function createGithubAgentTool(ctx: SubagentContext) {
     inputSchema: z.object({ instruction: z.string().describe("Clear instruction for what to do in GitHub") }),
     execute: async ({ instruction }) => {
       const tools = createGithubTools(ctx);
-      return runSubagent(dedent`
+      const rules = fetchToolRules("github_agent", ctx);
+      const { text, internals } = await runSubagent(dedent`
         You are a GitHub management agent. Handle repository, PR, and commit operations.
 
         For READ operations: execute immediately.
@@ -104,6 +138,8 @@ function createGithubAgentTool(ctx: SubagentContext) {
         • "Create a PR" → Missing: which repo (owner/repo), which branches, title
         • "Check the PRs" → Missing: which repo (specify owner and repo name)
       `, instruction, tools);
+      const answer = rules ? text + rules : text;
+      return { answer, internals };
     },
   });
 }
@@ -115,7 +151,8 @@ function createGoogleCalendarAgentTool(ctx: SubagentContext) {
     execute: async ({ instruction }) => {
       const tools = createGoogleCalendarTools(ctx);
       if (Object.keys(tools).length === 0) return "Google Calendar not available (no user context).";
-      return runSubagent(dedent`
+      const rules = fetchToolRules("google_calendar_agent", ctx);
+      const { text, internals } = await runSubagent(dedent`
         You are a Google Calendar agent. Handle event search, creation, updates, and deletion.
 
         For READ operations: execute immediately.
@@ -124,6 +161,35 @@ function createGoogleCalendarAgentTool(ctx: SubagentContext) {
         • "Delete the meeting" → Missing: which meeting specifically (search first)
         • "Move the meeting" → Missing: which meeting, to when
       `, instruction, tools);
+      const answer = rules ? text + rules : text;
+      return { answer, internals };
+    },
+  });
+}
+
+function createNotionAgentTool(ctx: SubagentContext) {
+  return tool({
+    description: "Dedicated Notion agent. Searches pages and databases, reads page content and properties. Read-only.",
+    inputSchema: z.object({ instruction: z.string().describe("Clear instruction for what to look up in Notion") }),
+    execute: async ({ instruction }) => {
+      const tools = createNotionTools(ctx);
+      const tree = ctx.teamId ? buildNotionTreeText(ctx.teamId) : null;
+      const treeBlock = tree
+        ? `\n\nPreviously discovered Notion structure (use IDs to navigate directly instead of searching):\n${tree}\nNote: this tree is incomplete — only pages accessed before are shown. Search if you need something not listed.`
+        : "";
+
+      const { text, internals } = await runSubagent(dedent`
+        You are a Notion read-only agent. You help find and read information from Notion pages and databases.
+
+        Your workflow:
+        1. Check the known structure below — if the page/database you need is listed, use its ID directly.
+        2. Otherwise, search for pages or databases matching the request.
+        3. Read page content or query databases as needed.
+        4. For databases, check the schema first with notion_get_database_schema before querying.
+
+        Return clear, structured results. Include page URLs so the user can navigate to them.${treeBlock}
+      `, instruction, tools);
+      return { answer: text, internals };
     },
   });
 }
@@ -139,8 +205,9 @@ function createExploreAgentTool(ctx: SubagentContext) {
         github_agent: createGithubAgentTool(ctx),
         google_calendar_agent: createGoogleCalendarAgentTool(ctx),
         database_agent: createDatabaseAgentTool(ctx),
+        notion_agent: createNotionAgentTool(ctx),
       };
-      return runSubagent(dedent`
+      const { text, internals } = await runSubagent(dedent`
         You are an exploration agent. Your job is to investigate and gather information across the organization's tools.
 
         You have access to specialized agents:
@@ -149,6 +216,7 @@ function createExploreAgentTool(ctx: SubagentContext) {
         • github_agent — search PRs, commits, repo activity
         • google_calendar_agent — search events, meeting notes
         • database_agent — query the org's database for data-driven answers
+        • notion_agent — search and read Notion pages and databases
 
         ALWAYS call multiple agents in parallel when information might exist across services. Fan out aggressively — don't call them one by one.
 
@@ -165,6 +233,7 @@ function createExploreAgentTool(ctx: SubagentContext) {
         *OPEN QUESTIONS*
         [Questions you couldn't answer — things the user would need to clarify. Be specific about what would help resolve each. Only include if confidence is not high.]
       `, instruction, tools, 8);
+      return { answer: text, internals };
     },
   });
 }
@@ -178,7 +247,7 @@ function createDatabaseAgentTool(ctx: SubagentContext) {
 
       ctx.artifacts?.popRecent();
 
-      const text = await runSubagent(dedent`
+      const subResult = await runSubagent(dedent`
         You are a read-only database query agent. You help answer questions by querying the PostgreSQL database.
 
         Your workflow:
@@ -209,9 +278,9 @@ function createDatabaseAgentTool(ctx: SubagentContext) {
         You can ONLY read data. If asked to modify, insert, update, or delete anything, refuse and explain that you are read-only.
       `, instruction, tools);
 
-      const answer = extractTag(text, "answer") ?? text;
-      const internals = extractTag(text, "internals");
-      const learningsRaw = extractTag(text, "learnings");
+      const answer = extractTag(subResult.text, "answer") ?? subResult.text;
+      const internals = extractTag(subResult.text, "internals");
+      const learningsRaw = extractTag(subResult.text, "learnings");
 
       if (learningsRaw && config.ai.supermemoryApiKey) {
         const learnings = learningsRaw.split("\n").map(l => l.replace(/^[-•]\s*/, "").trim()).filter(Boolean);
@@ -221,8 +290,8 @@ function createDatabaseAgentTool(ctx: SubagentContext) {
       }
 
       const newArtifactIds = ctx.artifacts?.popRecent() ?? [];
-      const result: Record<string, any> = { answer };
-      if (internals) result.internals = internals;
+      const result: Record<string, any> = { answer, internals: subResult.internals };
+      if (internals) result.queryInternals = internals;
 
       if (newArtifactIds.length > 0 && ctx.artifacts) {
         const artifact = ctx.artifacts.get(newArtifactIds[0]);
@@ -353,8 +422,7 @@ export function createOrchestratorTools(ctx: SubagentContext) {
         next_tools: z.array(z.string()).describe("Which tools you plan to call next based on your confidence"),
       }),
       execute: async ({ confidence, reasoning, next_tools }) => {
-        const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-        const advisor = helicone(SUBAGENT_MODEL);
+        const advisor = SUBAGENT_MODEL;
 
         const history = ctx.toolHistory ?? [];
         const historyBlock = history.length > 0
@@ -399,7 +467,10 @@ export function createOrchestratorTools(ctx: SubagentContext) {
             abortSignal: AbortSignal.timeout(10_000),
           });
           return { confidence, reasoning, next_tools, secondOpinion };
-        } catch {
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError" || error instanceof Error && error.name === "AbortError") {
+            console.warn("[subagent] second opinion aborted (timeout)");
+          }
           return { confidence, reasoning, next_tools, secondOpinion: null };
         }
       },
@@ -410,6 +481,7 @@ export function createOrchestratorTools(ctx: SubagentContext) {
     github_agent: createGithubAgentTool(ctx),
     google_calendar_agent: createGoogleCalendarAgentTool(ctx),
     database_agent: createDatabaseAgentTool(ctx),
+    notion_agent: createNotionAgentTool(ctx),
     codebase_explore: createCodebaseExploreAgentTool(ctx),
   };
   const memory = createMemoryTools(ctx);

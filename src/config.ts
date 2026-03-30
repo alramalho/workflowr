@@ -28,12 +28,17 @@ export const config = {
     redirectUri: optionalEnv("GOOGLE_REDIRECT_URI"),
   },
   ai: {
-    heliconeApiKey: optionalEnv("HELICONE_API_KEY"),
-    model: optionalEnv("AI_MODEL") ?? "claude-4.6-sonnet",
+    model: optionalEnv("AI_MODEL") ?? "anthropic/claude-sonnet-4.6",
     supermemoryApiKey: optionalEnv("SUPERMEMORY_API_KEY"),
   },
   linear: {
     apiKey: optionalEnv("LINEAR_API_KEY"),
+  },
+  notion: {
+    apiKey: optionalEnv("NOTION_API_KEY"),
+  },
+  redis: {
+    url: optionalEnv("REDIS_URL") ?? "redis://localhost:6379",
   },
   oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3847", 10),
 };

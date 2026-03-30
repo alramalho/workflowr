@@ -11,6 +11,8 @@ export interface OrgMember {
   writing_style: string | null;
   representative_example_message: string | null;
   is_external: number;
+  problem_to_solve: string | null;
+  user_overrides: string | null;
   updated_at: string;
 }
 
@@ -43,7 +45,7 @@ export function getAllOrgMembers(teamId?: string): OrgMember[] {
 
 export function updateOrgMember(
   slackId: string,
-  fields: { name?: string; linearId?: string; reportsTo?: string; role?: string; writingStyle?: string; representativeExampleMessage?: string; isExternal?: boolean },
+  fields: { name?: string; linearId?: string; reportsTo?: string; role?: string; writingStyle?: string; representativeExampleMessage?: string; isExternal?: boolean; problemToSolve?: string; userOverrides?: string },
 ) {
   const member = getOrgMemberBySlackId(slackId);
   if (!member) return undefined;
@@ -57,6 +59,8 @@ export function updateOrgMember(
       writing_style = ?,
       representative_example_message = ?,
       is_external = ?,
+      problem_to_solve = ?,
+      user_overrides = ?,
       updated_at = datetime('now')
     WHERE slack_id = ?
   `).run(
@@ -67,6 +71,8 @@ export function updateOrgMember(
     fields.writingStyle !== undefined ? fields.writingStyle : member.writing_style,
     fields.representativeExampleMessage !== undefined ? fields.representativeExampleMessage : member.representative_example_message,
     fields.isExternal !== undefined ? (fields.isExternal ? 1 : 0) : member.is_external,
+    fields.problemToSolve !== undefined ? fields.problemToSolve : member.problem_to_solve,
+    fields.userOverrides !== undefined ? fields.userOverrides : member.user_overrides,
     slackId,
   );
 

@@ -8,7 +8,9 @@ import * as sm from "../integrations/supermemory.js";
 import { buildMemoryBlocks, buildTaskBlocks } from "./actions.js";
 import { getOrgByTeamId, createOrg, updateOrg } from "../db/orgs.js";
 import { enrichOrgFromUrl, buildOrgChart } from "../jobs/org-awareness.js";
-import { ALLOWED_USERS } from "./events.js";
+import { ALLOWED_USERS, ADMIN_USERS } from "./events.js";
+import { startSetup } from "../setup-flow.js";
+import { logUsage, getUsageSummary } from "../db/usage-log.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -20,8 +22,18 @@ const GOOGLE_SCOPES = [
 ];
 
 export function registerCommands(app: App) {
+  const logCmd = (command: { user_id: string; team_id: string; channel_id: string }, name: string) =>
+    logUsage({
+      userId: command.user_id,
+      userName: ALLOWED_USERS[command.user_id],
+      teamId: command.team_id,
+      invocationType: `command:${name}`,
+      channelId: command.channel_id,
+    });
+
   app.command("/google-auth", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/google-auth");
 
     if (!config.google.clientId || !config.google.clientSecret || !config.google.redirectUri) {
       await app.client.chat.postEphemeral({
@@ -64,6 +76,7 @@ export function registerCommands(app: App) {
 
   app.command("/google-disconnect", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/google-disconnect");
 
     const existing = getToken(command.user_id);
     if (!existing) {
@@ -85,6 +98,7 @@ export function registerCommands(app: App) {
 
   app.command("/slack-auth", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/slack-auth");
 
     if (!config.slack.clientId || !config.slack.clientSecret || !config.slack.redirectUri) {
       await app.client.chat.postEphemeral({
@@ -123,6 +137,7 @@ export function registerCommands(app: App) {
 
   app.command("/slack-disconnect", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/slack-disconnect");
 
     const existing = getSlackToken(command.user_id);
     if (!existing) {
@@ -144,6 +159,7 @@ export function registerCommands(app: App) {
 
   app.command("/remember", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/remember");
 
     if (!config.ai.supermemoryApiKey) {
       await app.client.chat.postEphemeral({
@@ -184,6 +200,7 @@ export function registerCommands(app: App) {
 
   app.command("/org-setup", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/org-setup");
 
     if (!("trigger_id" in command)) return;
 
@@ -271,6 +288,7 @@ export function registerCommands(app: App) {
 
   app.command("/create-task", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/create-task");
 
     if (!("trigger_id" in command)) return;
 
@@ -311,6 +329,7 @@ export function registerCommands(app: App) {
 
   app.command("/my-workflowr", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/my-workflowr");
 
     try {
       const blocks = buildTaskBlocks(command.user_id, command.team_id);
@@ -331,8 +350,43 @@ export function registerCommands(app: App) {
     }
   });
 
+  app.command("/setup-workflowr", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/setup-workflowr");
+
+    if (!(command.user_id in ALLOWED_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You're not allowed to use this. Talk to <@U08PH00GP9Q> if you want access.",
+      });
+      return;
+    }
+
+    const teamId = command.team_id;
+    if (!teamId || !getOrgByTeamId(teamId)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Organization is not set up yet. Run `/org-setup` first.",
+      });
+      return;
+    }
+
+    const dm = await app.client.conversations.open({ users: command.user_id });
+    const channelId = dm.channel!.id!;
+
+    startSetup(command.user_id, teamId, channelId);
+
+    await app.client.chat.postMessage({
+      channel: channelId,
+      text: "Let's get you set up! First — what's your role? (e.g. \"Tech Lead, AI team\", \"Head of CX\")",
+    });
+  });
+
   app.command("/memories", async ({ command, ack }) => {
     await ack();
+    logCmd(command, "/memories");
 
     if (!config.ai.supermemoryApiKey) {
       await app.client.chat.postEphemeral({
@@ -370,5 +424,60 @@ export function registerCommands(app: App) {
         text: "Something went wrong fetching memories.",
       });
     }
+  });
+
+  app.command("/usage", async ({ command, ack }) => {
+    await ack();
+
+    if (!(command.user_id in ADMIN_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You're not authorized to use this.",
+      });
+      return;
+    }
+
+    const daysArg = parseInt(command.text?.trim() || "30", 10);
+    const days = Number.isNaN(daysArg) || daysArg < 1 ? 30 : daysArg;
+    const summary = getUsageSummary(days);
+
+    const userLines = summary.byUser
+      .map((u, i) => `${i + 1}. <@${u.user_id}> — ${u.count} calls`)
+      .join("\n");
+
+    const typeLines = summary.byType
+      .map((t) => `• \`${t.invocation_type}\` — ${t.count}`)
+      .join("\n");
+
+    const activityLines = summary.recentActivity
+      .map((a) => `${a.date}: ${a.count}`)
+      .join("\n");
+
+    const cetNote = "_Times stored in UTC. Dates shown as UTC days._";
+
+    const text = [
+      `*Usage Summary (last ${days} days)*`,
+      "",
+      `*Total invocations:* ${summary.totalCalls}`,
+      `*Total tool calls:* ${summary.totalToolCalls}`,
+      "",
+      `*Top Users:*`,
+      userLines || "_No activity_",
+      "",
+      `*By Invocation Type:*`,
+      typeLines || "_No activity_",
+      "",
+      `*Daily Activity (last 14 days):*`,
+      activityLines ? `\`\`\`${activityLines}\`\`\`` : "_No activity_",
+      "",
+      cetNote,
+    ].join("\n");
+
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text,
+    });
   });
 }

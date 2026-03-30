@@ -7,8 +7,8 @@ import { registerEvents } from "./listeners/events.js";
 import { registerActions } from "./listeners/actions.js";
 import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { startMeetingWatcher } from "./jobs/meeting-watcher.js";
-import { startJobRunner } from "./jobs/job-runner.js";
-import { setupLinearDoneNudge } from "./jobs/linear-done-nudge.js";
+import { startAgentWorker } from "./queues/agent-queue.js";
+import { startDelayedJobsWorker } from "./queues/delayed-jobs-queue.js";
 import { setupOrgAwareness } from "./jobs/org-awareness.js";
 import { setupStaleIssuesReporter } from "./jobs/linear-stale-issues.js";
 import { setupTaskStepExecutor } from "./jobs/task-step-executor.js";
@@ -24,8 +24,9 @@ const app = new App({
 registerCommands(app);
 registerEvents(app);
 registerActions(app);
-setupLinearDoneNudge(app);
-setupOrgAwareness(app);
+if (process.env.ORG_AWARENESS_ENABLED === "true") {
+  setupOrgAwareness(app);
+}
 setupStaleIssuesReporter(app);
 setupTaskStepExecutor(app);
 
@@ -50,6 +51,16 @@ const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
   await app.start();
   console.log("Slack bot is running");
 
-  startJobRunner(app);
+  const agentWorker = startAgentWorker(app);
+  const delayedWorker = startDelayedJobsWorker(app);
   startOAuthServer(config.oauthPort, { slackApp: app, channel: AI_CHANNEL, repos: REPOS });
+
+  const shutdown = async () => {
+    console.log("[shutdown] closing workers, waiting for in-flight jobs...");
+    await Promise.all([agentWorker.close(), delayedWorker.close()]);
+    await app.stop();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 })();

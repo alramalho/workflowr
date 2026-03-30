@@ -1,6 +1,6 @@
-import { generateText, generateObject, stepCountIs } from "ai";
+import { stepCountIs } from "ai";
+import { generateText, generateObject } from "../utils/ai.js";
 import { z } from "zod";
-import { createHelicone } from "@helicone/ai-sdk-provider";
 import type { App } from "@slack/bolt";
 import dedent from "dedent";
 import { config } from "../config.js";
@@ -8,17 +8,22 @@ import { createOrchestratorTools } from "./subagents.js";
 import { ArtifactStore } from "./artifacts.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
-import { getAllOrgMembers } from "../db/org-members.js";
+import { getAllOrgMembers, getOrgMemberBySlackId } from "../db/org-members.js";
 import { getTeamsForMember } from "../db/teams.js";
 import { getGuidelines } from "../db/org-guidelines.js";
 import { getUserTasks, getTaskSteps } from "../db/tasks.js";
+import { persistStepMessages } from "../queues/step-persistence.js";
 
 function getSystemPrompt() {
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const now = new Date();
+  const today = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  const weekNumber = Math.ceil(((now.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
   return dedent`
   You are a blunt, salty teammate. You coordinate work across Linear, GitHub, Slack, and Google Calendar through specialized agents.
 
-  Today is ${today}. Use this to correctly label events as "today", "yesterday", "tomorrow", etc.
+  Today is ${today}, ${timeStr}, Week ${weekNumber} of the year. Use this to correctly label events as "today", "yesterday", "tomorrow", etc.
 
   Keep it short and direct. Make jokes if you want, but make them salty. No corporate fluff, no "how can I help you today" energy.
 
@@ -81,8 +86,9 @@ function getSystemPrompt() {
   If the text summary alone answers the question, skip the file upload — not every query needs a file.
   IMPORTANT: Once you've uploaded a file via slack_agent, do NOT repeat or summarize the data in your text response — the file is already visible. Just add a brief comment (e.g. "here's the breakdown") and the internals. Avoid markdown tables or top-N previews when the file already contains the data.
 
-  IMPORTANT: When you store a memory via memory_add, always append a short quote at the end of your response summarizing what was stored. Example format:
+  IMPORTANT: When you store a memory via memory_add, always append a short quote at the end of your response summarizing what was stored. If the result includes toolRules, mention which tools the rule will apply to. Example formats:
   > _Remembered (user): Alex prefers issues assigned to CX team by default_
+  > _Remembered (user, applies to: slack_agent): format slack threads as 'alex [said](link) something'_
 
   IMPORTANT: Messages in the context include timestamps (e.g. "[2h ago]", "[1d ago]"). If context contains old/stale requests or tasks (e.g. from hours or days ago), do NOT jump into executing them. Instead, ask the user if they still want that done — priorities change, and old requests may already be handled or no longer relevant. Focus on answering the *current* message first.
 
@@ -100,11 +106,8 @@ function getSystemPrompt() {
 }
 
 export async function shouldRespond(threadContext: string, latestMessage: string): Promise<boolean> {
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone("gemini-3-flash-preview");
-
   const result = await generateObject({
-    model,
+    model: "google/gemini-3-flash-preview",
     schema: z.object({ shouldRespond: z.boolean() }),
     prompt: dedent`
       You are a gating mechanism for a Slack bot that was mentioned or is listening in a thread.
@@ -138,6 +141,7 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   github_agent: "checking GitHub...",
   google_calendar_agent: "checking calendar...",
   database_agent: "querying the database...",
+  notion_agent: "searching Notion...",
   codebase_explore: "exploring codebase...",
   claude_code: "running Claude Code...",
   remember: "memorizing...",
@@ -160,10 +164,12 @@ export async function runAgent(
   channelId?: string,
   threadTs?: string,
   onStatusUpdate?: (status: string) => void,
+  files?: { data: Buffer; mimeType: string; name: string }[],
+  jobId?: string,
+  recoveryMessages?: any[],
 ): Promise<AgentResult> {
   const startTime = Date.now();
-  const helicone = createHelicone({ apiKey: config.ai.heliconeApiKey, headers: { "Helicone-Property-App": "workflowr" } });
-  const model = helicone(config.ai.model);
+  const model = config.ai.model;
   const toolHistory: { tool: string; input: unknown; output: unknown }[] = [];
   const artifacts = new ArtifactStore();
   const tools = createOrchestratorTools({ app, slackUserId, teamId, conversationHistory: context, channelId, threadTs, toolHistory, artifacts });
@@ -212,7 +218,14 @@ export async function runAgent(
         parts.push(`reports to: ${manager?.name ?? m.reports_to}`);
       }
       const memberTeams = getTeamsForMember(m.id);
-      if (memberTeams.length > 0) parts.push(`teams: ${memberTeams.map((t) => t.name).join(", ")}`);
+      if (memberTeams.length > 0) {
+        const teamsStr = memberTeams.map((t) => {
+          const tools = t.tools ? JSON.parse(t.tools) as string[] : [];
+          return tools.length > 0 ? `${t.name} (tools: ${tools.join(", ")})` : t.name;
+        }).join(", ");
+        parts.push(`teams: ${teamsStr}`);
+      }
+      if (m.problem_to_solve) parts.push(`solving: ${m.problem_to_solve}`);
       if (m.writing_style) parts.push(`style: ${m.writing_style}`);
       if (m.representative_example_message) parts.push(`example msg: "${m.representative_example_message}"`);
       return `• ${parts.join(" | ")}`;
@@ -246,6 +259,14 @@ export async function runAgent(
     for (const [id, name] of Object.entries(ALLOWED_USERS)) {
       resolvedContext = resolvedContext.replaceAll(`<@${id}>`, name);
     }
+    // also resolve org members not in ALLOWED_USERS (e.g. external guests)
+    const unresolvedIds = [...resolvedContext.matchAll(/<@(U[A-Z0-9]+)>/g)].map((m) => m[1]);
+    for (const id of unresolvedIds) {
+      const member = getOrgMemberBySlackId(id);
+      if (member?.name) {
+        resolvedContext = resolvedContext.replaceAll(`<@${id}>`, member.name);
+      }
+    }
   }
 
   const senderLabel = senderName ? `Message from ${senderName}:` : "User message:";
@@ -253,7 +274,11 @@ export async function runAgent(
     ? `${resolvedContext}\n\n${senderLabel} ${prompt}`
     : `${senderLabel} ${prompt}`;
 
-  const userContent: Array<{ type: "text"; text: string } | { type: "image"; image: Buffer; mimeType: string }> = [
+  const userContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; image: Buffer; mimeType: string }
+    | { type: "file"; data: Buffer; mediaType: string; filename: string }
+  > = [
     { type: "text", text: fullPrompt },
   ];
   if (images?.length) {
@@ -261,15 +286,29 @@ export async function runAgent(
       userContent.push({ type: "image", image: img.data, mimeType: img.mimeType });
     }
   }
+  if (files?.length) {
+    for (const f of files) {
+      userContent.push({ type: "file", data: f.data, mediaType: f.mimeType, filename: f.name });
+    }
+  }
+
+  const messages: any[] = [
+    { role: "user", content: userContent },
+    ...(recoveryMessages ?? []),
+  ];
+
+  if (recoveryMessages?.length) {
+    console.log(`[agent] recovering from ${recoveryMessages.length} persisted messages (job ${jobId})`);
+  }
 
   const result = await generateText({
     model,
     system: systemPrompt,
-    messages: [{ role: "user", content: userContent }],
+    messages,
     tools,
     stopWhen: stepCountIs(15),
     abortSignal: AbortSignal.timeout(120_000),
-    onStepFinish({ toolCalls, toolResults }) {
+    onStepFinish({ toolCalls, toolResults, response }) {
       for (const tc of toolCalls) {
         const matching = toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
         toolHistory.push({
@@ -285,22 +324,24 @@ export async function runAgent(
         const labels = [...new Set(toolCalls.map((tc: any) => toolStatusLabel(tc.toolName)))];
         onStatusUpdate(labels.join(" "));
       }
+      if (jobId && response?.messages) {
+        persistStepMessages(jobId, response.messages).catch((e) =>
+          console.error(`[agent] failed to persist step for job ${jobId}:`, e),
+        );
+      }
     },
   });
 
   const latencyMs = Date.now() - startTime;
 
-  const toolCallRecords: { name: string; input: unknown; output: unknown }[] = [];
-  for (const step of result.steps) {
-    for (const tc of step.toolCalls) {
-      const matching = step.toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
-      toolCallRecords.push({
-        name: tc.toolName,
-        input: (tc as any).input ?? (tc as any).args,
-        output: matching ? ((matching as any).output ?? (matching as any).result ?? null) : null,
-      });
-    }
-  }
+  // Use toolHistory (populated by onStepFinish) instead of result.steps —
+  // result.steps only reflects the final model's execution, losing tool calls
+  // from before a gateway-timeout fallback.
+  const toolCallRecords = toolHistory.map((h) => ({
+    name: h.tool,
+    input: h.input,
+    output: h.output,
+  }));
 
   return { text: result.text, toolCalls: toolCallRecords, latencyMs };
 }
