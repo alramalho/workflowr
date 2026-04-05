@@ -300,7 +300,8 @@ Each person has a "confidence" field (high/medium/low). Low confidence means the
       if (onToolStep && toolCalls.length) {
         const steps = toolCalls.map((tc: any) => {
           const matching = toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
-          const output = matching ? String((matching as any).output ?? (matching as any).result ?? "") : "";
+          const raw = matching ? ((matching as any).output ?? (matching as any).result ?? "") : "";
+          const output = typeof raw === "string" ? raw : JSON.stringify(raw);
           return { name: tc.toolName, input: (tc as any).input ?? (tc as any).args, output: output.slice(0, 500) };
         });
         onToolStep({ tools: steps });
