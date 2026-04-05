@@ -43,7 +43,8 @@ export function startDelayedJobsWorker(app: App) {
       const { type, payload } = job.data as { type: string; payload: Record<string, unknown> };
       const handler = handlers.get(type);
       if (!handler) {
-        throw new Error(`No handler for delayed job type "${type}"`);
+        console.warn(`[delayed-jobs] skipping unknown job type "${type}" (job ${job.id})`);
+        return;
       }
       await handler(app, payload);
     },

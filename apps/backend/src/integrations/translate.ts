@@ -121,8 +121,12 @@ export async function translateMessage(
   teamDomain: string,
   files?: any[],
 ): Promise<string> {
-  const names = messageUser ? await resolveUserNames(app, [messageUser]) : new Map();
+  const mentionRe = /<@(U[A-Z0-9]+)>/g;
+  const mentionIds = [...(messageText ?? "").matchAll(mentionRe)].map((m) => m[1]);
+  const allIds = [...new Set([...(messageUser ? [messageUser] : []), ...mentionIds])];
+  const names = allIds.length ? await resolveUserNames(app, allIds) : new Map<string, string>();
   const name = (messageUser && names.get(messageUser)) ?? "Someone";
+  const resolvedText = messageText.replace(mentionRe, (_, id) => `@${names.get(id) ?? id}`);
 
   const imgText = files?.length ? await processImageFiles(files, messageText) : "";
 
@@ -136,7 +140,7 @@ export async function translateMessage(
 
       *${name}*: "translated message"
 
-      Message: ${messageText}
+      Message: ${resolvedText}
     `,
   });
 
@@ -169,7 +173,11 @@ export async function translateThread(
     return "No new messages since last translation.";
   }
 
-  const userIds = [...new Set(messages.map((m) => m.user).filter(Boolean))] as string[];
+  // collect user IDs from both message authors and <@U...> mentions in text
+  const mentionRe = /<@(U[A-Z0-9]+)>/g;
+  const authorIds = messages.map((m) => m.user).filter(Boolean) as string[];
+  const mentionIds = messages.flatMap((m) => [...(m.text ?? "").matchAll(mentionRe)].map((match) => match[1]));
+  const userIds = [...new Set([...authorIds, ...mentionIds])];
   const names = await resolveUserNames(app, userIds);
 
   const lines = await Promise.all(messages.map(async (m) => {
@@ -183,7 +191,9 @@ export async function translateThread(
     });
     const files = (m as any).files as any[] | undefined;
     const imgText = files?.length ? await processImageFiles(files, m.text ?? "") : "";
-    const text = (m.text ?? "") + (imgText ? "\n\n" + imgText : "");
+    // replace <@U...> mentions with @DisplayName
+    const rawText = (m.text ?? "").replace(mentionRe, (_, id) => `@${names.get(id) ?? id}`);
+    const text = rawText + (imgText ? "\n\n" + imgText : "");
     return { name, text, link, date };
   }));
 

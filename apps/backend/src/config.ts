@@ -1,4 +1,9 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, "../../../.env") });
 
 function env(key: string): string {
   const value = process.env[key];
@@ -41,4 +46,5 @@ export const config = {
     url: optionalEnv("REDIS_URL") ?? "redis://localhost:6379",
   },
   oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3847", 10),
+  oauthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
 };

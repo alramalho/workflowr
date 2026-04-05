@@ -14,7 +14,6 @@
     "@helicone/ai-sdk-provider": "^1.0.12",
     "@linear/sdk": "^76.0.0",
     "@notionhq/client": "^5.14.0",
-    "@openrouter/ai-sdk-provider": "^2.3.3",
     "@slack/bolt": "^4.6.0",
     "@supermemory/tools": "^1.4.0",
     "ai": "^6.0.105",
@@ -29,6 +28,7 @@
     "octokit": "^5.0.5",
     "pg": "^8.20.0",
     "supermemory": "^4.15.0",
+    "ws": "^8.20.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -37,6 +37,7 @@
     "@types/node": "^25.3.2",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.18.0",
+    "@types/ws": "^8.18.1",
     "concurrently": "^9.2.1",
     "localtunnel": "^2.0.2",
     "tsx": "^4.21.0",

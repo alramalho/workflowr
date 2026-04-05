@@ -1,0 +1,336 @@
+/* ── org header ── */
+.org-tree {
+  max-width: 900px;
+}
+
+.org-header {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.org-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.org-diamond {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.org-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.5px;
+}
+
+.org-desc {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.org-stats {
+  margin-top: 12px;
+  display: flex;
+  gap: 16px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.stat svg {
+  color: var(--accent);
+}
+
+.org-meta {
+  margin-top: 8px;
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── sections ── */
+.tree-section {
+  margin-bottom: 28px;
+}
+
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tick {
+  color: var(--accent);
+  font-size: 14px;
+}
+
+/* ── tree ── */
+.tree-root,
+.tree-children {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tree-children {
+  padding-left: 0;
+  margin-top: 2px;
+}
+
+.tree-item {
+  display: flex;
+  position: relative;
+}
+
+.tree-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 20px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* vertical line connecting siblings */
+.tree-item:not(.last) > .tree-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 100%;
+  background: var(--border);
+  transform: translateX(-50%);
+}
+
+.tree-item.last > .tree-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+  transform: translateX(-50%);
+}
+
+/* horizontal branch line */
+.tree-branch {
+  display: block;
+  width: 10px;
+  height: 12px;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 0;
+  margin-left: 0;
+  align-self: flex-start;
+}
+
+.tree-root > .tree-item > .tree-line > .tree-branch {
+  border-left: none;
+  border-bottom: none;
+}
+
+.tree-root > .tree-item > .tree-line::after {
+  display: none;
+}
+
+.tree-node-dot {
+  font-size: 6px;
+  color: var(--accent);
+  position: absolute;
+  top: 7px;
+  z-index: 1;
+}
+
+.tree-content {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0 4px 8px;
+}
+
+/* ── person ── */
+.tree-person {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-radius: 3px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  transition: background 0.15s;
+}
+
+.tree-person.clickable {
+  cursor: pointer;
+}
+
+.tree-person.clickable:hover {
+  background: var(--bg-elevated);
+}
+
+.collapse-count {
+  font-size: 9px;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 0 5px;
+  border-radius: 2px;
+  line-height: 1.6;
+}
+
+.person-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.person-role {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.person-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+.person-tag.external {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.person-teams {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.team-badge {
+  font-size: 9px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+}
+
+/* ── teams grid ── */
+.teams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.team-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.team-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.team-diamond {
+  color: var(--accent);
+  font-size: 8px;
+}
+
+.team-card-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.team-tools {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.team-card-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.team-member-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tm-dot {
+  font-size: 5px;
+  color: var(--accent);
+}
+
+.tm-name {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.tm-role {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── externals ── */
+.externals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.external-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ext-dot {
+  font-size: 8px;
+  color: var(--text-dim);
+}
+
+.ext-name {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ext-role {
+  font-size: 10px;
+  color: var(--text-dim);
+}
