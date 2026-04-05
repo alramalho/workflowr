@@ -10,18 +10,25 @@ function formatDuration(ms: number): string {
 
 function renderInlineMarkdown(text: string): (string | JSX.Element)[] {
   const parts: (string | JSX.Element)[] = []
-  const re = /(`([^`]+)`|\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_)/g
+  // match: markdown links, raw URLs, backtick code, bold, italic
+  const re = /(\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s)]+)|`([^`]+)`|\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_)/g
   let last = 0
   let match: RegExpExecArray | null
   let key = 0
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) parts.push(text.slice(last, match.index))
-    if (match[2]) {
-      parts.push(<span key={key++} className="syntax-code">{match[2]}</span>)
-    } else if (match[3]) {
-      parts.push(<strong key={key++}>{match[3]}</strong>)
+    if (match[2] && match[3]) {
+      // markdown link [text](url)
+      parts.push(<a key={key++} className="terminal-link" href={match[3]} target="_blank" rel="noopener noreferrer">{match[2]}</a>)
+    } else if (match[4]) {
+      // raw URL
+      parts.push(<a key={key++} className="terminal-link" href={match[4]} target="_blank" rel="noopener noreferrer">{match[4]}</a>)
+    } else if (match[5]) {
+      parts.push(<span key={key++} className="syntax-code">{match[5]}</span>)
+    } else if (match[6]) {
+      parts.push(<strong key={key++}>{match[6]}</strong>)
     } else {
-      parts.push(<em key={key++}>{match[4] ?? match[5]}</em>)
+      parts.push(<em key={key++}>{match[7] ?? match[8]}</em>)
     }
     last = match.index + match[0].length
   }
@@ -30,7 +37,12 @@ function renderInlineMarkdown(text: string): (string | JSX.Element)[] {
 }
 
 function stripMarkdown(text: string): string {
-  return text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/_(.+?)_/g, '$1').replace(/`([^`]+)`/g, '$1')
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
 }
 
 function renderAsciiTable(tableLines: string[]): JSX.Element {

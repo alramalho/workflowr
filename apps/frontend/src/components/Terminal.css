@@ -99,6 +99,18 @@
   font-weight: 600;
 }
 
+.terminal-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--text-dim);
+  transition: border-style 0.1s;
+}
+
+.terminal-link:hover {
+  border-bottom-style: dashed;
+  color: var(--text);
+}
+
 .syntax-code {
   color: #d7775699;
 }
