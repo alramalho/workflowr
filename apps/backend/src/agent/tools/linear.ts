@@ -2,7 +2,8 @@ import { tool } from "ai";
 import { z } from "zod";
 import * as linear from "../../integrations/linear.js";
 import { hasExplicitConfirmation } from "../confirmation.js";
-import { getAllOrgMembers, updateOrgMember } from "../../db/org-members.js";
+import { allFilesInDir } from "../../org/tree.js";
+import { propagatePerson, findPersonBySlackId } from "../../org/propagate.js";
 import { downloadSlackImage } from "../../integrations/translate.js";
 import type { SubagentContext } from "./types.js";
 
@@ -124,21 +125,27 @@ export function createLinearTools(ctx: SubagentContext) {
       execute: async () => {
         const members = await linear.listMembers();
         try {
-          const orgMembers = getAllOrgMembers(teamId);
-          const needsSync = orgMembers.filter((m) => !m.linear_id);
-          if (needsSync.length > 0) {
-            const slackEmails = new Map<string, string>();
-            for (const m of needsSync) {
-              try {
-                const info = await app.client.users.info({ user: m.slack_id });
-                const email = info.user?.profile?.email;
-                if (email) slackEmails.set(email.toLowerCase(), m.slack_id);
-              } catch {}
-            }
-            for (const lm of members) {
-              if (!lm.email) continue;
-              const slackId = slackEmails.get(lm.email.toLowerCase());
-              if (slackId) updateOrgMember(slackId, { linearId: lm.id });
+          if (teamId) {
+            const people = allFilesInDir(teamId, "people").filter((f) => f.name !== "_index.mdx" && !f.frontmatter.linear_id);
+            if (people.length > 0) {
+              const slackEmails = new Map<string, string>();
+              for (const p of people) {
+                try {
+                  const info = await app.client.users.info({ user: p.frontmatter.slack_id });
+                  const email = info.user?.profile?.email;
+                  if (email) slackEmails.set(email.toLowerCase(), p.frontmatter.slack_id);
+                } catch {}
+              }
+              for (const lm of members) {
+                if (!lm.email) continue;
+                const slackId = slackEmails.get(lm.email.toLowerCase());
+                if (slackId) {
+                  const person = findPersonBySlackId(teamId, slackId);
+                  if (person) {
+                    propagatePerson(teamId, { slackId, name: person.frontmatter.name, linearId: lm.id });
+                  }
+                }
+              }
             }
           }
         } catch (e) {

@@ -7,10 +7,13 @@ import { sendWeeklyReport } from "../jobs/weekly-report.js";
 import * as sm from "../integrations/supermemory.js";
 import { buildMemoryBlocks, buildTaskBlocks } from "./actions.js";
 import { getOrgByTeamId, createOrg, updateOrg } from "../db/orgs.js";
-import { enrichOrgFromUrl, buildOrgChart } from "../jobs/org-awareness.js";
+import { enrichOrgFromUrl } from "../org/awareness.js";
+import { cat } from "../org/tree.js";
 import { ALLOWED_USERS, ADMIN_USERS } from "./events.js";
-import { startSetup } from "../setup-flow.js";
+import { bootstrapOrgAwareness } from "../org/awareness.js";
+import { countFiles } from "../org/tree.js";
 import { logUsage, getUsageSummary } from "../db/usage-log.js";
+import { createRunner, getRunnerForUser } from "../db/runners.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -208,7 +211,9 @@ export function registerCommands(app: App) {
 
     if (existing?.url && existing?.description) {
       // org already set up — show current info + org chart with edit/delete options
-      const chart = command.team_id ? buildOrgChart(command.team_id) : "";
+      const chart = command.team_id
+        ? [cat(command.team_id, "teams/_index.mdx"), cat(command.team_id, "people/_index.mdx")].filter(Boolean).join("\n\n")
+        : "";
       await app.client.chat.postEphemeral({
         channel: command.channel_id,
         user: command.user_id,
@@ -373,14 +378,28 @@ export function registerCommands(app: App) {
       return;
     }
 
-    const dm = await app.client.conversations.open({ users: command.user_id });
-    const channelId = dm.channel!.id!;
+    const statusMsg = await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: ":hourglass_flowing_sand: Running backfill — scanning Slack threads...",
+    });
 
-    startSetup(command.user_id, teamId, channelId);
-
-    await app.client.chat.postMessage({
-      channel: channelId,
-      text: "Let's get you set up! First — what's your role? (e.g. \"Tech Lead, AI team\", \"Head of CX\")",
+    const filesBefore = countFiles(teamId);
+    bootstrapOrgAwareness(app, teamId).then((threadsAnalyzed) => {
+      const filesAfter = countFiles(teamId);
+      const newFiles = filesAfter - filesBefore;
+      app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: `:white_check_mark: Backfill complete — ${threadsAnalyzed} threads analyzed, ${filesAfter} files in tree (${newFiles >= 0 ? "+" : ""}${newFiles} net).`,
+      });
+    }).catch((err) => {
+      console.error("[setup-workflowr] Backfill failed:", err);
+      app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: ":x: Backfill failed. Check logs.",
+      });
     });
   });
 
@@ -478,6 +497,48 @@ export function registerCommands(app: App) {
       channel: command.channel_id,
       user: command.user_id,
       text,
+    });
+  });
+
+  app.command("/setup-runner", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/setup-runner");
+
+    if (!(command.user_id in ALLOWED_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You're not allowed to use this. Talk to <@U08PH00GP9Q> if you want access.",
+      });
+      return;
+    }
+
+    const existing = getRunnerForUser(command.user_id, command.team_id);
+    if (existing && existing.status === "connected") {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "You already have a runner connected. To set up a new one, disconnect the existing one first.",
+      });
+      return;
+    }
+
+    const runner = existing ?? createRunner(command.user_id, command.team_id);
+    const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
+    const installCmd = `curl -fsSL ${serverUrl}/runner/install.sh | bash -s ${runner.token}`;
+
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: [
+        "*Runner Setup*",
+        "",
+        "Run this on your machine to connect your codebase to workflowr:",
+        "",
+        `\`\`\`${installCmd}\`\`\``,
+        "",
+        "It will install a background service that auto-starts on login. Once connected, workflowr can explore your code when you ask questions.",
+      ].join("\n"),
     });
   });
 }

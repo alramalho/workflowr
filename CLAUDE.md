@@ -12,8 +12,8 @@ Monorepo for the Chatarmin Slack bot ("workflowr") and its companion frontend.
 ### Stack
 - TypeScript, ts-node
 - @slack/bolt for Slack events/commands
-- Vercel AI SDK with Claude for agent responses
-- better-sqlite3 for token storage
+- Vercel AI SDK for agent responses
+- better-sqlite3 for db
 - Integrations: Linear, GitHub, Google Calendar (read-only), Supermemory
 
 ### Structure

@@ -2,12 +2,11 @@ import type { App } from "@slack/bolt";
 import { shouldRespond } from "../agent/index.js";
 import { getThreadReplies } from "../integrations/slack.js";
 import { downloadSlackImage, SUPPORTED_IMAGE_TYPES } from "../integrations/translate.js";
-import { getOrgMemberBySlackId } from "../db/org-members.js";
+import { findPersonBySlackId } from "../org/propagate.js";
 import { getOrgByTeamId } from "../db/orgs.js";
 import { getThreadArtifacts } from "../db/artifacts.js";
 import { getThreadBotCalls } from "../db/bot-calls.js";
 import { enqueueAgentJob } from "../queues/agent-queue.js";
-import { getActiveSetup, handleSetupReply } from "../setup-flow.js";
 import { logUsage } from "../db/usage-log.js";
 
 export const ADMIN_USERS: Record<string, string> = {
@@ -41,7 +40,10 @@ function formatTimeAgo(ts: string): string {
 function formatReactions(m: any): string {
   if (!m.reactions?.length) return "";
   const entries = m.reactions.map((r: any) => {
-    const names = (r.users ?? []).map((u: string) => getOrgMemberBySlackId(u)?.name ?? ALLOWED_USERS[u] ?? `<@${u}>`);
+    const names = (r.users ?? []).map((u: string) => {
+      const person = findPersonBySlackId(m.team, u);
+      return person?.frontmatter.name ?? ALLOWED_USERS[u] ?? `<@${u}>`;
+    });
     return `${r.name}: [${names.join(", ")}]`;
   });
   return `\n> reactions: {${entries.join(", ")}}`;
@@ -80,15 +82,6 @@ export function registerEvents(app: App) {
     const isDM = "channel_type" in message && message.channel_type === "im";
     const messageText = ("text" in message && message.text) ? message.text : "";
 
-    // intercept DM replies during active conversational flows
-    if (isDM && messageText) {
-      const activeSetup = getActiveSetup(message.user as string);
-      if (activeSetup) {
-        await handleSetupReply(app, message.user as string, messageText);
-        return;
-      }
-
-    }
 
     const isMentioned = messageText.includes(`<@${userId}>`);
     const threadTs = "thread_ts" in message ? message.thread_ts : undefined;

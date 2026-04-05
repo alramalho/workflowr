@@ -1,0 +1,210 @@
+.terminal {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  font-size: 13px;
+  cursor: text;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.cmd-entry {
+  margin-bottom: 8px;
+}
+
+.cmd-line {
+  display: flex;
+  gap: 8px;
+}
+
+.cmd-prompt {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.cmd-text {
+  color: var(--text);
+}
+
+.syntax-cmd {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.syntax-path {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.syntax-string {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.syntax-arg {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cmd-duration {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.cmd-output {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 2px 0 0 18px;
+  line-height: 1.5;
+}
+
+.cmd-output-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cmd-ascii-table {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  margin: 4px 0;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.cmd-ascii-table .table-header {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.syntax-code {
+  color: #d7775699;
+}
+
+.cmd-output strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cmd-output em {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* tool steps */
+.tool-step {
+  margin: 2px 0 0 18px;
+  font-size: 11px;
+}
+
+.tool-step-label {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.tool-step-label:hover {
+  color: var(--text-muted);
+}
+
+.tool-step-output {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 4px 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* response with icon */
+.cmd-response {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  align-items: flex-start;
+}
+
+.response-icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  opacity: 0.8;
+}
+
+.cmd-loading {
+  color: var(--accent);
+  animation: blink 0.8s step-start infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.3; }
+}
+
+.terminal-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  cursor: text;
+}
+
+.input-wrapper {
+  flex: 1;
+  position: relative;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.input-highlight {
+  white-space: pre;
+  pointer-events: none;
+}
+
+.input-placeholder {
+  color: var(--text-dim);
+}
+
+.terminal-input input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: none;
+  border: none;
+  outline: none;
+  color: transparent;
+  caret-color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.terminal-input input:disabled {
+  opacity: 0.5;
+}

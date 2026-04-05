@@ -4,6 +4,7 @@ import { z } from "zod";
 import dedent from "dedent";
 import { config } from "../config.js";
 import { execFile } from "child_process";
+import { isRunnerConnected, sendTaskToRunner, getConnectedRunnerDirectories } from "../runner/server.js";
 import { createLinearTools } from "./tools/linear.js";
 import { createSlackTools } from "./tools/slack.js";
 import { createGithubTools } from "./tools/github.js";
@@ -13,6 +14,7 @@ import { createTaskTools } from "./tools/tasks.js";
 import { createDatabaseTools } from "./tools/database.js";
 import { createClaudeCodeTools } from "./tools/claude-code.js";
 import { createNotionTools } from "./tools/notion.js";
+import { createOrgTools } from "./tools/org.js";
 import { buildNotionTreeText } from "../db/notion-pages.js";
 import * as sm from "../integrations/supermemory.js";
 import { saveArtifact } from "../db/artifacts.js";
@@ -323,7 +325,7 @@ function createDatabaseAgentTool(ctx: SubagentContext) {
   });
 }
 
-const CODEBASE_WORKSPACES: Record<string, { path: string; description: string }> = {
+const LOCAL_CODEBASE_WORKSPACES: Record<string, { path: string; description: string }> = {
   cx: {
     path: `${process.env.HOME}/workspace/chatarmin/cx`,
     description: "Main Chatarmin CX application — handles conversations, AI agents, workflows, contacts, organizations, billing, messaging (WhatsApp/SMS/email)",
@@ -331,18 +333,35 @@ const CODEBASE_WORKSPACES: Record<string, { path: string; description: string }>
 };
 
 function createCodebaseExploreAgentTool(ctx: SubagentContext) {
-  const workspaceNames = Object.keys(CODEBASE_WORKSPACES);
-  const workspaceList = Object.entries(CODEBASE_WORKSPACES)
+  const { slackUserId, teamId } = ctx;
+  const useRunner = slackUserId && teamId && isRunnerConnected(slackUserId, teamId);
+  const runnerDirs = useRunner ? getConnectedRunnerDirectories(slackUserId!, teamId!) : [];
+
+  const workspaces: Record<string, { path: string; description: string }> = useRunner
+    ? Object.fromEntries(runnerDirs.map((d) => [d.name, { path: d.path, description: d.description ?? d.name }]))
+    : LOCAL_CODEBASE_WORKSPACES;
+
+  const workspaceNames = Object.keys(workspaces);
+  const workspaceList = Object.entries(workspaces)
     .map(([name, ws]) => `• ${name}: ${ws.description}`)
     .join("\n");
 
+  if (workspaceNames.length === 0) {
+    return tool({
+      description: "Explore the product codebase. Currently unavailable — no workspaces connected.",
+      inputSchema: z.object({ question: z.string() }),
+      execute: async () => ({ error: "No codebase workspaces available. The user needs to connect a runner with /setup-runner." }),
+    });
+  }
+
   return tool({
-    description: `Explore the product codebase to understand domain concepts, data models, business logic, or code structure. Read-only — no modifications. Use when domain knowledge is missing (e.g. 'what counts as a workflow', 'how is v3 defined'). Checks known codebase guidelines first, then explores code if needed. Heavyweight (runs Claude Code, ~1-3 min).\n\nAvailable codebases:\n${workspaceList}`,
+    description: `Explore the product codebase to understand domain concepts, data models, business logic, or code structure. Read-only — no modifications. Use when domain knowledge is missing. Checks known codebase guidelines first, then explores code if needed. Heavyweight (~1-3 min).${useRunner ? " Running on user's connected machine." : ""}\n\nAvailable codebases:\n${workspaceList}`,
     inputSchema: z.object({
       question: z.string().describe("What you want to understand about the codebase"),
-      workspace: z.enum(workspaceNames as [string, ...string[]]).default("cx").describe(`Which codebase to explore. Options: ${workspaceNames.join(", ")}`),
+      workspace: z.enum(workspaceNames as [string, ...string[]]).default(workspaceNames[0]).describe(`Which codebase to explore`),
     }),
-    execute: async ({ question, workspace = "cx" }) => {
+    execute: async ({ question, workspace }) => {
+      workspace = workspace ?? workspaceNames[0];
       let guidelines = "";
       if (config.ai.supermemoryApiKey) {
         try {
@@ -353,7 +372,7 @@ function createCodebaseExploreAgentTool(ctx: SubagentContext) {
         } catch {}
       }
 
-      const ws = CODEBASE_WORKSPACES[workspace];
+      const ws = workspaces[workspace];
       if (!ws) return { error: `Unknown workspace "${workspace}". Available: ${workspaceNames.join(", ")}` };
 
       const instruction = dedent`
@@ -379,17 +398,23 @@ function createCodebaseExploreAgentTool(ctx: SubagentContext) {
       `;
 
       try {
-        const stdout = await new Promise<string>((resolve, reject) => {
-          execFile("claude", ["-p", "--dangerously-skip-permissions", "--output-format", "text", instruction], {
-            cwd: ws.path,
-            timeout: 3 * 60 * 1000,
-            maxBuffer: 5 * 1024 * 1024,
-            env: { ...process.env },
-          }, (err, stdout, stderr) => {
-            if (err) reject(new Error(`Codebase exploration failed: ${err.message}`));
-            else resolve(stdout);
+        let stdout: string;
+
+        if (useRunner) {
+          stdout = await sendTaskToRunner(slackUserId!, teamId!, instruction, ws.path);
+        } else {
+          stdout = await new Promise<string>((resolve, reject) => {
+            execFile("claude", ["-p", "--dangerously-skip-permissions", "--output-format", "text", instruction], {
+              cwd: ws.path,
+              timeout: 3 * 60 * 1000,
+              maxBuffer: 5 * 1024 * 1024,
+              env: { ...process.env },
+            }, (err, stdout, stderr) => {
+              if (err) reject(new Error(`Codebase exploration failed: ${err.message}`));
+              else resolve(stdout);
+            });
           });
-        });
+        }
 
         const learningsRaw = extractTag(stdout, "learnings");
         if (learningsRaw && config.ai.supermemoryApiKey) {
@@ -490,5 +515,7 @@ export function createOrchestratorTools(ctx: SubagentContext) {
   for (const [k, v] of Object.entries(tasks)) base[k] = v;
   const claudeCode = createClaudeCodeTools(ctx);
   for (const [k, v] of Object.entries(claudeCode)) base[k] = v;
+  const org = createOrgTools(ctx.teamId);
+  for (const [k, v] of Object.entries(org)) base[k] = v;
   return base;
 }

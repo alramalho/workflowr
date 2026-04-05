@@ -1,8 +1,10 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const DB_PATH = process.env.DB_PATH ?? path.resolve("data", "tokens.db");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_PATH = process.env.DB_PATH ?? path.resolve(__dirname, "../../data", "tokens.db");
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
@@ -23,17 +25,6 @@ db.exec(`
     slack_user_id TEXT PRIMARY KEY,
     access_token  TEXT NOT NULL,
     connected_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    name            TEXT NOT NULL,
-    slack_id        TEXT UNIQUE,
-    linear_id       TEXT,
-    github_username TEXT,
-    metadata        TEXT NOT NULL DEFAULT '{}'
   )
 `);
 
@@ -72,63 +63,6 @@ if (!orgTableCols.some((c) => c.name === "location")) {
 }
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS org_members (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    slack_id     TEXT NOT NULL UNIQUE,
-    team_id      TEXT,
-    name         TEXT NOT NULL,
-    linear_id    TEXT,
-    reports_to   TEXT,
-    role         TEXT,
-    writing_style TEXT,
-    representative_example_message TEXT,
-    is_external  INTEGER NOT NULL DEFAULT 0,
-    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
-
-// migrate: add representative_example_message to existing org_members tables
-const orgCols = db.prepare(`PRAGMA table_info(org_members)`).all() as Array<{ name: string }>;
-if (!orgCols.some((c) => c.name === "representative_example_message")) {
-  db.exec(`ALTER TABLE org_members ADD COLUMN representative_example_message TEXT`);
-}
-if (!orgCols.some((c) => c.name === "linear_id")) {
-  db.exec(`ALTER TABLE org_members ADD COLUMN linear_id TEXT`);
-}
-if (!orgCols.some((c) => c.name === "is_external")) {
-  db.exec(`ALTER TABLE org_members ADD COLUMN is_external INTEGER NOT NULL DEFAULT 0`);
-}
-if (!orgCols.some((c) => c.name === "problem_to_solve")) {
-  db.exec(`ALTER TABLE org_members ADD COLUMN problem_to_solve TEXT`);
-}
-if (!orgCols.some((c) => c.name === "user_overrides")) {
-  db.exec(`ALTER TABLE org_members ADD COLUMN user_overrides TEXT`);
-}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS teams (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    org_id  INTEGER NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-    name    TEXT NOT NULL,
-    UNIQUE(org_id, name)
-  )
-`);
-
-const teamsTableCols = db.prepare(`PRAGMA table_info(teams)`).all() as Array<{ name: string }>;
-if (!teamsTableCols.some((c) => c.name === "tools")) {
-  db.exec(`ALTER TABLE teams ADD COLUMN tools TEXT`);
-}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS team_members (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    team_id       INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-    org_member_id INTEGER NOT NULL REFERENCES org_members(id) ON DELETE CASCADE,
-    UNIQUE(team_id, org_member_id)
-  )
-`);
-
-db.exec(`
   CREATE TABLE IF NOT EXISTS thread_reads (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id   TEXT NOT NULL,
@@ -137,36 +71,6 @@ db.exec(`
     UNIQUE(channel_id, thread_ts)
   )
 `);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS org_guidelines (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    team_id  TEXT,
-    key      TEXT NOT NULL,
-    value    TEXT NOT NULL,
-    UNIQUE(key, team_id)
-  )
-`);
-
-// seed default ticket creation guidelines
-const hasTicketGuidelines = db.prepare(`SELECT 1 FROM org_guidelines WHERE key = 'ticket_creation'`).get();
-if (!hasTicketGuidelines) {
-  db.prepare(`INSERT INTO org_guidelines (team_id, key, value) VALUES (NULL, 'ticket_creation', ?)`).run(
-    [
-      "When creating Linear tickets, follow these rules:",
-      "• Always create tickets in English, even if the original conversation is in another language (e.g. German).",
-      "• Always assign the person who asked to create the ticket as the assignee. Use linear_list_members to resolve their Linear ID if needed.",
-      "• For AI-related issues (hallucination, wrong information, bad tone, wrong recommendations):",
-      '  - Add the "AI Debug" label.',
-      '  - Add to the "AI (Achieve SOTA)" project.',
-      "  - In the description, explain what went wrong and what the expected outcome should have been.",
-      "  - Include the original message in italic as a quote, plus a translated English version if it's not in English. Example:",
-      "    _Die KI hätte das Produkt XScreen nicht empfehlen sollen._",
-      "    (The AI should have not recommended the product XScreen)",
-      '  - If the issue is about something "not working" (functional bug), also add the "Bug" label.',
-    ].join("\n"),
-  );
-}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS delayed_jobs (
@@ -278,5 +182,44 @@ db.exec(`
     PRIMARY KEY (id, team_id)
   )
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS runners (
+    id           TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL,
+    team_id      TEXT NOT NULL,
+    token        TEXT NOT NULL UNIQUE,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    cwd          TEXT,
+    last_seen_at TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS runner_directories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    runner_id   TEXT NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(runner_id, name)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS org_files (
+    team_id     TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    parent_path TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    frontmatter TEXT NOT NULL DEFAULT '{}',
+    content     TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (team_id, path)
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_org_files_parent ON org_files(team_id, parent_path)`);
 
 export default db;

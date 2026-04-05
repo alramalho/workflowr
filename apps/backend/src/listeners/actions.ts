@@ -6,7 +6,8 @@ import { getThreadReplies } from "../integrations/slack.js";
 import { ALLOWED_USERS, ADMIN_USERS } from "./events.js";
 import { textToBlocksWithTable } from "../slack-table.js";
 import { getOrgByTeamId, createOrg, updateOrg, deleteOrg } from "../db/orgs.js";
-import { enrichOrgFromUrl, bootstrapOrgAwareness, editOrgFromInstruction, buildOrgChart } from "../jobs/org-awareness.js";
+import { enrichOrgFromUrl, bootstrapOrgAwareness, editOrgFromInstruction } from "../org/awareness.js";
+import { cat } from "../org/tree.js";
 import {
   getUserTasks,
   getTaskSteps,
@@ -20,6 +21,8 @@ import {
 } from "../db/tasks.js";
 import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
 import { logUsage } from "../db/usage-log.js";
+import { isRunnerConnected, getConnectedRunnerDirectories } from "../runner/server.js";
+import { getRunnerForUser } from "../db/runners.js";
 
 // In-memory history for ask_workflowr so consecutive asks on the same thread retain context
 const askHistory = new Map<string, { role: "user" | "assistant"; text: string }[]>();
@@ -140,6 +143,32 @@ function buildStepTree(steps: TaskStep[]): { step: TaskStep; children: TaskStep[
 export function buildTaskBlocks(userId: string, teamId?: string): any[] {
   const tasks = getUserTasks(userId, teamId);
   const blocks: any[] = [];
+
+  // Runner status
+  if (teamId) {
+    const connected = isRunnerConnected(userId, teamId);
+    const dirs = connected ? getConnectedRunnerDirectories(userId, teamId) : [];
+    const runner = getRunnerForUser(userId, teamId);
+
+    if (connected && dirs.length > 0) {
+      const dirList = dirs.map((d) => `\`${d.name}\`${d.description ? ` — ${d.description}` : ""}`).join(", ");
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `:large_green_circle: *Runner connected* — workspaces: ${dirList}` },
+      });
+    } else if (runner) {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `:white_circle: *Runner disconnected* — run the install command again or check your machine` },
+      });
+    } else {
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `:white_circle: *No runner set up* — use \`/setup-runner\` to connect your codebase` },
+      });
+    }
+    blocks.push({ type: "divider" });
+  }
 
   blocks.push({
     type: "section",
@@ -562,10 +591,11 @@ export function registerActions(app: App) {
 
       // bootstrap org awareness in the background
       bootstrapOrgAwareness(app, teamId).then((count) => {
-        const chart = buildOrgChart(teamId);
+        const peopleIndex = cat(teamId, "people/_index.mdx") ?? "";
+        const teamsIndex = cat(teamId, "teams/_index.mdx") ?? "";
         client.chat.postMessage({
           channel: userId,
-          text: `Org awareness bootstrap complete — analyzed ${count} threads.\n\n${chart}`,
+          text: `Org awareness bootstrap complete — analyzed ${count} threads.\n\n${teamsIndex}\n\n${peopleIndex}`,
         });
       }).catch((e) => {
         console.error("Bootstrap error:", e);

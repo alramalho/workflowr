@@ -9,10 +9,11 @@ import { sendWeeklyReport } from "./jobs/weekly-report.js";
 import { startMeetingWatcher } from "./jobs/meeting-watcher.js";
 import { startAgentWorker } from "./queues/agent-queue.js";
 import { startDelayedJobsWorker } from "./queues/delayed-jobs-queue.js";
-import { setupOrgAwareness } from "./jobs/org-awareness.js";
+import { setupOrgAwareness } from "./org/awareness.js";
 import { setupStaleIssuesReporter } from "./jobs/linear-stale-issues.js";
 import { setupTaskStepExecutor } from "./jobs/task-step-executor.js";
 import { startOAuthServer } from "./oauth-server.js";
+import { setupRunnerServer } from "./runner/server.js";
 
 const app = new App({
   token: config.slack.botToken,
@@ -53,7 +54,8 @@ const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
   const agentWorker = startAgentWorker(app);
   const delayedWorker = startDelayedJobsWorker(app);
-  startOAuthServer(config.oauthPort, { slackApp: app, channel: AI_CHANNEL, repos: REPOS });
+  const { expressApp, httpServer } = startOAuthServer(config.oauthPort, { slackApp: app, channel: AI_CHANNEL, repos: REPOS });
+  setupRunnerServer(httpServer, expressApp, app);
 
   const shutdown = async () => {
     console.log("[shutdown] closing workers, waiting for in-flight jobs...");

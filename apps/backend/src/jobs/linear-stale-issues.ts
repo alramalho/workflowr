@@ -1,7 +1,8 @@
 import type { App } from "@slack/bolt";
 import cron from "node-cron";
 import { listStaleIssues } from "../integrations/linear.js";
-import { getUserByLinearId } from "../db/users.js";
+import { findPersonByLinearId } from "../org/propagate.js";
+import { getAllOrgs } from "../db/orgs.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 
 const STALE_DAYS = 15;
@@ -9,8 +10,12 @@ const STALE_DAYS = 15;
 function resolveSlackUser(
   assignee: { id: string; name: string },
 ): string | null {
-  const user = getUserByLinearId(assignee.id);
-  if (user?.slack_id) return user.slack_id;
+  const orgs = getAllOrgs();
+  for (const org of orgs) {
+    if (!org.team_id) continue;
+    const person = findPersonByLinearId(org.team_id, assignee.id);
+    if (person?.frontmatter.slack_id) return person.frontmatter.slack_id;
+  }
 
   const nameLower = assignee.name.toLowerCase();
   for (const [slackId, name] of Object.entries(ALLOWED_USERS)) {
