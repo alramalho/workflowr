@@ -1,3 +1,4 @@
+import type { JSX } from 'react'
 import './FileViewer.css'
 
 type SlackIdMap = Map<string, { name: string; path: string }>

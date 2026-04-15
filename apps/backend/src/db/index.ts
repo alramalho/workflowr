@@ -222,4 +222,16 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_org_files_parent ON org_files(team_id, parent_path)`);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS secrets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    created_by  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(team_id, name)
+  )
+`);
+
 export default db;

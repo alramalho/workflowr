@@ -24,6 +24,7 @@
     "express": "^5.2.1",
     "googleapis": "^171.4.0",
     "ioredis": "5.9.3",
+    "jose": "^6.2.2",
     "node-cron": "^4.2.1",
     "octokit": "^5.0.5",
     "pg": "^8.20.0",

@@ -1,3 +1,4 @@
+// @ts-nocheck — unused legacy component, will be removed
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Square, Diamond, Triangle, Circle, GitBranch, Users, UserX } from 'lucide-react'
 import type { OrgData, OrgMember, TreeNode } from '../types'

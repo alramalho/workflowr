@@ -47,4 +47,6 @@ export const config = {
   },
   oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3847", 10),
   oauthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
+  jwtSecret: optionalEnv("JWT_SECRET") ?? "workflowr-dev-secret",
+  webRedirectUri: optionalEnv("WEB_REDIRECT_URI") ?? "http://localhost:4073",
 };

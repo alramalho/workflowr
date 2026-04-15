@@ -5,11 +5,20 @@ import { FileTree } from './components/FileTree'
 import { FileViewer } from './components/FileViewer'
 import { TabBar } from './components/TabBar'
 import { Terminal } from './components/Terminal'
+import { useAuth, authHeaders, LoginScreen } from './auth'
 import type { OrgTree, CommandResult, ToolStep } from './types'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3847'
 
 function App() {
+  const { user, loading: authLoading, logout } = useAuth()
+
+  if (authLoading) {
+    return <div className="app loading-screen"><span className="pixel-spinner" /></div>
+  }
+  if (!user) {
+    return <LoginScreen />
+  }
   const [data, setData] = useState<OrgTree | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -23,7 +32,7 @@ function App() {
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
 
   useEffect(() => {
-    fetch(`${API_URL}/api/org-tree`)
+    fetch(`${API_URL}/api/org-tree`, { headers: authHeaders() })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -98,7 +107,7 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           messages: updatedMessages,
           viewDescription: activeTab ? `User is viewing: ${activeTab}` : '',
@@ -194,6 +203,10 @@ function App() {
 
   return (
     <div className="app">
+      <div className="user-bar">
+        <span>{user.name}</span>
+        <button onClick={logout}>sign out</button>
+      </div>
       <Group orientation="horizontal" id="main-layout">
         <Panel defaultSize={20} minSize={15} id="tree-panel">
           <FileTree

@@ -14,6 +14,7 @@ import { bootstrapOrgAwareness } from "../org/awareness.js";
 import { countFiles } from "../org/tree.js";
 import { logUsage, getUsageSummary } from "../db/usage-log.js";
 import { createRunner, getRunnerForUser } from "../db/runners.js";
+import { upsertSecret, deleteSecret as removeSecret, listSecrets } from "../db/secrets.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -539,6 +540,102 @@ export function registerCommands(app: App) {
         "",
         "It will install a background service that auto-starts on login. Once connected, workflowr can explore your code when you ask questions.",
       ].join("\n"),
+    });
+  });
+
+  app.command("/set-secret", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/set-secret");
+
+    if (!(command.user_id in ADMIN_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Only admins can manage secrets.",
+      });
+      return;
+    }
+
+    const parts = command.text?.trim().split(/\s+/);
+    if (!parts || parts.length < 2) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Usage: `/set-secret <name> <value>`",
+      });
+      return;
+    }
+
+    const [name, ...rest] = parts;
+    const value = rest.join(" ");
+    upsertSecret(command.team_id, name, value, command.user_id);
+
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: `Secret \`${name}\` saved.`,
+    });
+  });
+
+  app.command("/delete-secret", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/delete-secret");
+
+    if (!(command.user_id in ADMIN_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Only admins can manage secrets.",
+      });
+      return;
+    }
+
+    const name = command.text?.trim();
+    if (!name) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Usage: `/delete-secret <name>`",
+      });
+      return;
+    }
+
+    const deleted = removeSecret(command.team_id, name);
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: deleted ? `Secret \`${name}\` deleted.` : `Secret \`${name}\` not found.`,
+    });
+  });
+
+  app.command("/list-secrets", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/list-secrets");
+
+    if (!(command.user_id in ADMIN_USERS)) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Only admins can manage secrets.",
+      });
+      return;
+    }
+
+    const secrets = listSecrets(command.team_id);
+    if (secrets.length === 0) {
+      await app.client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "No secrets configured.",
+      });
+      return;
+    }
+
+    const lines = secrets.map((s) => `• \`${s.name}\` — set ${s.created_at}${s.created_by ? ` by <@${s.created_by}>` : ""}`);
+    await app.client.chat.postEphemeral({
+      channel: command.channel_id,
+      user: command.user_id,
+      text: `*Secrets:*\n${lines.join("\n")}`,
     });
   });
 }

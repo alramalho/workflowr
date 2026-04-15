@@ -2,6 +2,7 @@ import type { App as SlackApp } from "@slack/bolt";
 import http from "http";
 import express from "express";
 import { google } from "googleapis";
+import { SignJWT, jwtVerify } from "jose";
 import { config } from "./config.js";
 import { upsertToken } from "./db/tokens.js";
 import { upsertSlackToken } from "./db/slack-tokens.js";
@@ -11,6 +12,9 @@ import { analyzeThread, bootstrapOrgAwareness } from "./org/awareness.js";
 import { getOrgByTeamId, getAllOrgs } from "./db/orgs.js";
 import { allFilesInDir, ls, cat } from "./org/tree.js";
 import { runAgent } from "./agent/index.js";
+import { ALLOWED_USERS } from "./listeners/events.js";
+
+const jwtSecretKey = new TextEncoder().encode(config.jwtSecret);
 
 interface ServerOptions {
   slackApp: SlackApp;
@@ -23,7 +27,7 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
 
   app.use((_req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Content-Type");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     next();
   });
@@ -49,8 +53,25 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     res.json(people.map((p) => ({ path: p.path, ...p.frontmatter, updatedAt: p.updated_at })));
   });
 
-  app.get("/api/org-tree", (req, res) => {
-    const teamId = (req.query.teamId as string) ?? getAllOrgs().find((o) => o.team_id)?.team_id;
+  // JWT auth middleware for /api/* routes
+  async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Not authenticated" });
+      return;
+    }
+    try {
+      const { payload } = await jwtVerify(auth.slice(7), jwtSecretKey);
+      (req as any).user = { slackUserId: payload.slackUserId as string, teamId: payload.teamId as string, name: payload.name as string };
+      next();
+    } catch {
+      res.status(401).json({ error: "Invalid or expired token" });
+    }
+  }
+
+  app.get("/api/org-tree", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const teamId = (req.query.teamId as string) ?? user.teamId ?? getAllOrgs().find((o) => o.team_id)?.team_id;
     if (!teamId) { res.json({ tree: [], files: {} }); return; }
     const entries = ls(teamId, ".");
     const files: Record<string, string> = {};
@@ -69,7 +90,8 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     res.json({ tree: entries, files });
   });
 
-  app.post("/api/chat", express.json(), async (req, res) => {
+  app.post("/api/chat", express.json(), requireAuth, async (req, res) => {
+    const user = (req as any).user;
     const { messages, viewDescription } = req.body ?? {};
     if (!messages || !Array.isArray(messages)) {
       res.status(400).json({ error: "messages[] required" });
@@ -106,9 +128,9 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
         opts.slackApp,
         latestPrompt,
         contextParts.join("\n\n"),
-        "U08PH00GP9Q", // Alex's slack ID
-        "T04T4N121MY", // team ID
-        "Alex",
+        user.slackUserId,
+        user.teamId,
+        user.name,
         undefined, undefined, undefined,
         (status) => sse("status", { status }),
         undefined, undefined, undefined,
@@ -174,6 +196,107 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
       }
     });
   });
+
+  // --- Web auth (Sign in with Slack via OpenID Connect) ---
+
+  app.get("/auth/web/start", (_req, res) => {
+    if (!config.slack.clientId) {
+      res.status(500).send("Slack OAuth not configured.");
+      return;
+    }
+
+    const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: config.slack.clientId,
+      scope: "openid,profile",
+      redirect_uri: `${serverUrl}/auth/web/callback`,
+      nonce: Math.random().toString(36).slice(2),
+    });
+
+    res.redirect(`https://slack.com/openid/connect/authorize?${params}`);
+  });
+
+  app.get("/auth/web/callback", async (req, res) => {
+    const code = req.query.code as string | undefined;
+    if (!code) {
+      res.status(400).send("Missing code parameter.");
+      return;
+    }
+
+    try {
+      const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
+
+      // Exchange code for OIDC token
+      const tokenResp = await fetch("https://slack.com/api/openid.connect.token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: config.slack.clientId!,
+          client_secret: config.slack.clientSecret!,
+          code,
+          redirect_uri: `${serverUrl}/auth/web/callback`,
+          grant_type: "authorization_code",
+        }),
+      });
+
+      const tokenData = await tokenResp.json() as any;
+      if (!tokenData.ok) {
+        console.error("Web auth OIDC token error:", tokenData.error);
+        res.status(400).send(`Slack auth failed: ${tokenData.error}`);
+        return;
+      }
+
+      // Get user info from OIDC
+      const userResp = await fetch("https://slack.com/api/openid.connect.userInfo", {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      const userData = await userResp.json() as any;
+      if (!userData.ok) {
+        res.status(400).send("Could not fetch user info from Slack.");
+        return;
+      }
+
+      const slackUserId = userData.sub; // OIDC subject = Slack user ID
+      const teamId = userData["https://slack.com/team_id"];
+      if (!slackUserId || !teamId) {
+        res.status(400).send("Could not identify Slack user.");
+        return;
+      }
+
+      if (!(slackUserId in ALLOWED_USERS)) {
+        res.status(403).send("You are not authorized to use this app.");
+        return;
+      }
+
+      const name = ALLOWED_USERS[slackUserId] ?? userData.name ?? slackUserId;
+      const token = await new SignJWT({ slackUserId, teamId, name })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("30d")
+        .sign(jwtSecretKey);
+
+      res.redirect(`${config.webRedirectUri}?token=${token}`);
+    } catch (err) {
+      console.error("Web auth callback error:", err);
+      res.status(500).send("Authentication failed. Please try again.");
+    }
+  });
+
+  app.get("/auth/web/me", async (req, res) => {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Not authenticated" });
+      return;
+    }
+    try {
+      const { payload } = await jwtVerify(auth.slice(7), jwtSecretKey);
+      res.json({ slackUserId: payload.slackUserId, teamId: payload.teamId, name: payload.name });
+    } catch {
+      res.status(401).json({ error: "Invalid token" });
+    }
+  });
+
+  // --- Existing OAuth callbacks ---
 
   app.get("/auth/slack/callback", async (req, res) => {
     const code = req.query.code as string | undefined;

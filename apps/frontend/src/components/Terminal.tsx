@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type JSX } from 'react'
 import { TerminalSquare } from 'lucide-react'
 import type { CommandResult, ToolStep } from '../types'
 import './Terminal.css'
