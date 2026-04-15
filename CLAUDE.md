@@ -20,7 +20,7 @@ Monorepo for the Chatarmin Slack bot ("workflowr") and its companion frontend.
 - `src/agent/` - AI agent config & tool definitions
 - `src/integrations/` - External service clients (Google, Linear, GitHub, Slack)
 - `src/listeners/` - Slack event/command/action handlers
-- `src/jobs/` - Scheduled tasks (weekly reports, meeting watcher)
+- `src/jobs/` - Scheduled tasks (weekly reports)
 - `src/db/` - SQLite schemas and token management
 
 ### Key behaviors

@@ -1,6 +1,46 @@
 import './FileViewer.css'
 
-function renderMdx(content: string, onNavigate: (path: string) => void): JSX.Element[] {
+type SlackIdMap = Map<string, { name: string; path: string }>
+
+function renderFmValue(
+  key: string,
+  value: string,
+  onNavigate: (path: string) => void,
+  slackIdMap: SlackIdMap,
+): JSX.Element {
+  const trimmed = value.trim()
+
+  if (key === 'reports_to' && /^U[A-Z0-9]+$/.test(trimmed)) {
+    const person = slackIdMap.get(trimmed)
+    if (person) {
+      return <span className="mdx-link" onClick={(e) => { e.stopPropagation(); onNavigate(person.path) }}>{person.name}</span>
+    }
+  }
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const items = JSON.parse(trimmed) as string[]
+      if (Array.isArray(items) && items.every((i) => typeof i === 'string')) {
+        return (
+          <>
+            {items.map((item, i) => {
+              if (key === 'teams') {
+                const slug = item.toLowerCase().replace(/\s+/g, '-')
+                const path = `teams/${slug}.mdx`
+                return <span key={i}>{i > 0 && ', '}<span className="mdx-link" onClick={(e) => { e.stopPropagation(); onNavigate(path) }}>{item}</span></span>
+              }
+              return <span key={i}>{i > 0 && ', '}{item}</span>
+            })}
+          </>
+        )
+      }
+    } catch { /* fall through */ }
+  }
+
+  return <>{trimmed}</>
+}
+
+function renderMdx(content: string, onNavigate: (path: string) => void, slackIdMap: SlackIdMap): JSX.Element[] {
   const lines = content.split('\n')
   const elements: JSX.Element[] = []
   let inFrontmatter = false
@@ -44,10 +84,11 @@ function renderMdx(content: string, onNavigate: (path: string) => void): JSX.Ele
           <div key="frontmatter" className="mdx-frontmatter">
             {frontmatterLines.map((l, j) => {
               const [key, ...rest] = l.split(':')
+              const rawValue = rest.join(':').trim()
               return (
                 <div key={j} className="fm-row">
                   <span className="fm-key">{key.trim()}</span>
-                  <span className="fm-val">{rest.join(':').trim()}</span>
+                  <span className="fm-val">{renderFmValue(key.trim(), rawValue, onNavigate, slackIdMap)}</span>
                 </div>
               )
             })}
@@ -95,23 +136,28 @@ function resolveLinkPath(href: string): string | null {
 
 function renderInline(text: string, onNavigate: (path: string) => void): (string | JSX.Element)[] {
   const parts: (string | JSX.Element)[] = []
-  const linkRe = /\[([^\]]*)\]\(([^)]*)\)/g
+  const linkRe = /\[([^\]]*)\]\(([^)]*)\)|\[(@[^\]]+\.mdx)\]/g
   let last = 0
   let match: RegExpExecArray | null
   while ((match = linkRe.exec(text)) !== null) {
     if (match.index > last) parts.push(text.slice(last, match.index))
-    const label = match[1] || match[2]
-    const path = resolveLinkPath(match[2])
-    if (path) {
+    if (match[3]) {
+      // bare link [@teams/ai.mdx]
+      const path = match[3].replace(/^@/, '')
+      const label = path.split('/').pop()?.replace('.mdx', '') ?? path
       parts.push(
-        <span
-          key={match.index}
-          className="mdx-link"
-          onClick={(e) => { e.stopPropagation(); onNavigate(path) }}
-        >{label}</span>
+        <span key={match.index} className="mdx-link" onClick={(e) => { e.stopPropagation(); onNavigate(path) }}>{label}</span>
       )
     } else {
-      parts.push(<span key={match.index} className="mdx-link">{label}</span>)
+      const label = match[1] || match[2]
+      const path = resolveLinkPath(match[2])
+      if (path) {
+        parts.push(
+          <span key={match.index} className="mdx-link" onClick={(e) => { e.stopPropagation(); onNavigate(path) }}>{label}</span>
+        )
+      } else {
+        parts.push(<span key={match.index} className="mdx-link">{label}</span>)
+      }
     }
     last = match.index + match[0].length
   }
@@ -123,10 +169,12 @@ export function FileViewer({
   path,
   content,
   onNavigate,
+  slackIdMap = new Map(),
 }: {
   path: string
   content: string
   onNavigate: (path: string) => void
+  slackIdMap?: SlackIdMap
 }) {
   return (
     <div className="file-viewer">
@@ -134,7 +182,7 @@ export function FileViewer({
         <span className="viewer-path">{path}</span>
       </div>
       <div className="viewer-content">
-        {renderMdx(content, onNavigate)}
+        {renderMdx(content, onNavigate, slackIdMap)}
       </div>
     </div>
   )

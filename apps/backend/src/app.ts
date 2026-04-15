@@ -6,7 +6,6 @@ import { registerCommands } from "./listeners/commands.js";
 import { registerEvents } from "./listeners/events.js";
 import { registerActions } from "./listeners/actions.js";
 import { sendWeeklyReport } from "./jobs/weekly-report.js";
-import { startMeetingWatcher } from "./jobs/meeting-watcher.js";
 import { startAgentWorker } from "./queues/agent-queue.js";
 import { startDelayedJobsWorker } from "./queues/delayed-jobs-queue.js";
 import { setupOrgAwareness } from "./org/awareness.js";
@@ -42,11 +41,6 @@ const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 // cron.schedule("0 17 * * 5", () => {
 //   sendWeeklyReport(app, AI_CHANNEL, REPOS).catch(console.error);
 // });
-
-// --- Meeting watcher ---
-// Polls calendar every 15min, schedules deliverables post 10min after meeting ends
-// Handles rescheduled meetings automatically
-// startMeetingWatcher(app, AI_CHANNEL);
 
 (async () => {
   await app.start();

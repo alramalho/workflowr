@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Panel, Group, Separator } from 'react-resizable-panels'
 import './App.css'
 import { FileTree } from './components/FileTree'
@@ -174,6 +174,22 @@ function App() {
     return <div className="app loading-screen dim">No org data yet. Run /setup-workflowr in Slack.</div>
   }
 
+  const slackIdMap = useMemo(() => {
+    const map = new Map<string, { name: string; path: string }>()
+    if (!data) return map
+    for (const [path, content] of Object.entries(data.files)) {
+      if (!path.startsWith('people/')) continue
+      const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
+      if (!fmMatch) continue
+      const nameM = fmMatch[1].match(/^name:\s*(.+)$/m)
+      const slackM = fmMatch[1].match(/^slack_id:\s*(.+)$/m)
+      if (nameM && slackM) {
+        map.set(slackM[1].trim(), { name: nameM[1].trim(), path })
+      }
+    }
+    return map
+  }, [data])
+
   const activeContent = activeTab ? data.files[activeTab] : null
 
   return (
@@ -201,7 +217,7 @@ function App() {
                 )}
                 <div className="viewer-body">
                   {activeContent ? (
-                    <FileViewer path={activeTab!} content={activeContent} onNavigate={(p) => openTab(p, true)} />
+                    <FileViewer path={activeTab!} content={activeContent} onNavigate={(p) => openTab(p, true)} slackIdMap={slackIdMap} />
                   ) : (
                     <div className="empty-viewer">
                       <span>Select a file to view</span>

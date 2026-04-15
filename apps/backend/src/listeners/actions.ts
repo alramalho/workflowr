@@ -216,6 +216,13 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
 
     const hasRecurringSteps = steps.some((s) => (s.type === "cron" || s.type === "trigger") && s.status === "active");
     const actions: any[] = [];
+    if (task.status === "active" && hasRecurringSteps) {
+      actions.push({
+        type: "button",
+        text: { type: "plain_text", text: "Trigger" },
+        action_id: `task_trigger_${task.id}`,
+      });
+    }
     if (task.status === "active") {
       actions.push({
         type: "button",
@@ -825,6 +832,22 @@ Be conversational and specific. Propose concrete steps once you have enough info
   });
 
   // task actions: pause, resume, complete, delete
+  app.action(/^task_trigger_\d+$/, async ({ action, ack, respond }) => {
+    await ack();
+    const taskId = parseInt((action as any).action_id.replace("task_trigger_", ""));
+    const steps = getTaskSteps(taskId);
+    const cronSteps = steps.filter((s) => s.type === "cron" && s.status === "active");
+    if (cronSteps.length === 0) {
+      await respond({ text: `No active cron steps to trigger.`, replace_original: false, response_type: "ephemeral" });
+      return;
+    }
+    for (const step of cronSteps) {
+      const { scheduleDelayedJob } = await import("../queues/delayed-jobs-queue.js");
+      scheduleDelayedJob("task_step_execute", `task_step_${step.id}_manual_${Date.now()}`, { stepId: step.id }, new Date());
+    }
+    await respond({ text: `Triggered ${cronSteps.length} step(s) for task #${taskId}. Results will be sent shortly.`, replace_original: false, response_type: "ephemeral" });
+  });
+
   app.action(/^task_pause_\d+$/, async ({ action, ack, respond }) => {
     await ack();
     const taskId = parseInt((action as any).action_id.replace("task_pause_", ""));

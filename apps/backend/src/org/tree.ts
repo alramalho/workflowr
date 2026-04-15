@@ -69,7 +69,7 @@ export function cat(teamId: string, filePath: string): string | null {
 
   const fm = JSON.parse(row.frontmatter);
   const fmLines = Object.entries(fm)
-    .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+    .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v).replace(/\n/g, " ")}`)
     .join("\n");
 
   if (!fmLines) return row.content;
