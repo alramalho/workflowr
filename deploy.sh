@@ -91,12 +91,8 @@ cd "$DIR"
 # Backup SQLite DB before deploy
 BACKUP_DIR="$DIR/backups"
 mkdir -p "$BACKUP_DIR"
-DB_FILE=$(docker compose exec -T bot find /app/data -name "*.db" 2>/dev/null || true)
-if [ -n "$DB_FILE" ]; then
-  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-  docker compose cp "bot:$DB_FILE" "$BACKUP_DIR/tokens_$TIMESTAMP.db"
-  echo "==> Backed up DB to backups/tokens_$TIMESTAMP.db"
-  # Keep only last 10 backups
+if docker compose cp bot:/app/data/tokens.db "$BACKUP_DIR/tokens_$(date +%Y%m%d_%H%M%S).db" 2>/dev/null; then
+  echo "==> Backed up DB"
   ls -t "$BACKUP_DIR"/*.db 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 else
   echo "==> No DB found (first deploy?), skipping backup"
