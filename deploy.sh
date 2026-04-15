@@ -35,6 +35,8 @@ if [ -n "$(git status --porcelain)" ]; then
     git add -A
     git commit -m "$MSG"
     git push
+    echo "==> Waiting for GitHub to propagate..."
+    sleep 5
   else
     read -p "Deploy anyway with unpushed changes? [y/N] " REPLY2
     if [[ ! "$REPLY2" =~ ^[Yy]$ ]]; then
