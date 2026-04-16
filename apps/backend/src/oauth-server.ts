@@ -199,16 +199,28 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
 
   // --- Web auth (Sign in with Slack via OAuth v2) ---
 
-  app.get("/auth/web/start", (_req, res) => {
+  app.get("/auth/web/start", async (_req, res) => {
+    // Dev mode: skip Slack OAuth, issue token directly for first admin user
+    if (!config.oauthServerUrl || config.oauthServerUrl.includes("localhost")) {
+      const [slackUserId, name] = Object.entries(ALLOWED_USERS)[0];
+      const teamId = getAllOrgs().find((o) => o.team_id)?.team_id ?? "dev";
+      const token = await new SignJWT({ slackUserId, teamId, name })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("30d")
+        .sign(jwtSecretKey);
+      res.redirect(`${config.webRedirectUri}?token=${token}`);
+      return;
+    }
+
     if (!config.slack.clientId) {
       res.status(500).send("Slack OAuth not configured.");
       return;
     }
 
-    const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
+    const serverUrl = config.oauthServerUrl;
     const params = new URLSearchParams({
       client_id: config.slack.clientId,
-      user_scope: "identity.basic",
+      user_scope: "search:read",
       redirect_uri: `${serverUrl}/auth/web/callback`,
     });
 
