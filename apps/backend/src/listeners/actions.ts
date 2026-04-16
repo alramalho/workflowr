@@ -21,6 +21,8 @@ import {
 } from "../db/tasks.js";
 import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
 import { logUsage } from "../db/usage-log.js";
+import { upsertSkill } from "../db/skills.js";
+import { upsertSecret } from "../db/secrets.js";
 import { isRunnerConnected, getConnectedRunnerDirectories } from "../runner/server.js";
 import { getRunnerForUser } from "../db/runners.js";
 
@@ -874,6 +876,49 @@ Be conversational and specific. Propose concrete steps once you have enough info
     const taskId = parseInt((action as any).action_id.replace("task_delete_", ""));
     deleteTask(taskId);
     await respond({ text: `Task #${taskId} deleted.`, replace_original: false, response_type: "ephemeral" });
+  });
+
+  app.action("skill_confirm", async ({ action, ack, respond }) => {
+    await ack();
+    try {
+      const payload = JSON.parse((action as any).value);
+      const { teamId, userId, skill, secrets } = payload;
+
+      for (const s of secrets) {
+        upsertSecret(teamId, s.name, s.value, userId);
+      }
+
+      upsertSkill(
+        teamId,
+        skill.name,
+        skill.description,
+        JSON.stringify(skill.trigger),
+        JSON.stringify(skill.action),
+        userId,
+      );
+
+      await respond({
+        text: `Skill \`${skill.name}\` created!${secrets.length > 0 ? ` ${secrets.length} secret(s) stored.` : ""} It's now available for me to use.`,
+        replace_original: true,
+        response_type: "ephemeral",
+      });
+    } catch (error) {
+      console.error("Skill confirm error:", error);
+      await respond({
+        text: "Something went wrong creating the skill.",
+        replace_original: true,
+        response_type: "ephemeral",
+      });
+    }
+  });
+
+  app.action("skill_cancel", async ({ ack, respond }) => {
+    await ack();
+    await respond({
+      text: "Skill creation cancelled.",
+      replace_original: true,
+      response_type: "ephemeral",
+    });
   });
 
   // handle modal submission

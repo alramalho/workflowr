@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getSecret } from "../../db/secrets.js";
 import type { SubagentContext } from "./types.js";
 
-function resolveSecrets(text: string, teamId: string): string {
+export function resolveSecrets(text: string, teamId: string): string {
   return text.replace(/\{\{secrets\.(\w+)\}\}/g, (_, name) => {
     const value = getSecret(teamId, name);
     if (!value) throw new Error(`Secret "${name}" not found. Set it with /set-secret ${name} <value>`);

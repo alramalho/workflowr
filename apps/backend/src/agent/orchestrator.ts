@@ -10,6 +10,7 @@ import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { findPersonBySlackId } from "../org/propagate.js";
 import { getUserTasks, getTaskSteps } from "../db/tasks.js";
+import { listSkills, parseTrigger } from "../db/skills.js";
 import { persistStepMessages } from "../queues/step-persistence.js";
 
 function getSystemPrompt() {
@@ -210,6 +211,18 @@ export async function runAgent(
     systemPrompt += `\n\nYou have org knowledge tools (org_ls, org_cat, org_grep) to browse the organization tree. The tree has: people/, people/external/, teams/, overview.mdx.
 Every directory has an _index.mdx file with a summary table of all entries — use org_cat on _index.mdx files to get structured overviews instead of listing individual files.
 Each person has a "confidence" field (high/medium/low). Low confidence means the person was seen in Slack but has no confirmed role or team — they may be inactive, a bot, or just not yet profiled. When answering questions about org size or team composition, distinguish between high-confidence confirmed members and low-confidence incomplete profiles.`;
+  }
+
+  // inject custom skills context
+  if (teamId) {
+    const skills = listSkills(teamId);
+    if (skills.length > 0) {
+      const skillLines = skills.map((s) => {
+        const trigger = parseTrigger(s);
+        return `• skill_${s.name}: ${s.description} (trigger: ${trigger.value})`;
+      });
+      systemPrompt += `\n\n*CUSTOM SKILLS*\nThe team has custom skills available as tools:\n${skillLines.join("\n")}\nWhen a user's request matches a skill's trigger, use the corresponding skill_* tool.`;
+    }
   }
 
   // inject active tasks context

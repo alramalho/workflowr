@@ -234,4 +234,18 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS skills (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    trigger     TEXT NOT NULL DEFAULT '{}',
+    action      TEXT NOT NULL DEFAULT '{}',
+    created_by  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(team_id, name)
+  )
+`);
+
 export default db;

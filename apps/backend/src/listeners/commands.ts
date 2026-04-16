@@ -15,6 +15,8 @@ import { countFiles } from "../org/tree.js";
 import { logUsage, getUsageSummary } from "../db/usage-log.js";
 import { createRunner, getRunnerForUser } from "../db/runners.js";
 import { upsertSecret, deleteSecret as removeSecret, listSecrets } from "../db/secrets.js";
+import { listSkills, deleteSkill } from "../db/skills.js";
+import { parseSkillDescription } from "../agent/skills-parser.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
 
@@ -637,5 +639,183 @@ export function registerCommands(app: App) {
       user: command.user_id,
       text: `*Secrets:*\n${lines.join("\n")}`,
     });
+  });
+
+  app.command("/skills", async ({ command, ack }) => {
+    await ack();
+    logCmd(command, "/skills");
+
+    const text = command.text?.trim() ?? "";
+    const spaceIdx = text.indexOf(" ");
+    const subcommand = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
+    const arg = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+
+    switch (subcommand) {
+      case "new": {
+        if (!(command.user_id in ALLOWED_USERS)) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "You're not allowed to use this. Talk to <@U08PH00GP9Q> if you want access.",
+          });
+          return;
+        }
+
+        if (!arg) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "Usage: `/skills new <describe your skill in natural language>`",
+          });
+          return;
+        }
+
+        await app.client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: ":hourglass_flowing_sand: Parsing your skill description...",
+        });
+
+        try {
+          const parsed = await parseSkillDescription(arg);
+
+          const actionConfig = parsed.action.config;
+          const previewLines = [
+            `*Skill Preview*`,
+            "",
+            `*Name:* \`${parsed.name}\``,
+            `*Description:* ${parsed.description}`,
+            `*Trigger:* ${parsed.trigger.type} — ${parsed.trigger.value}`,
+            `*Action:* ${actionConfig.method} ${actionConfig.url}`,
+          ];
+          if (actionConfig.auth_secret) {
+            previewLines.push(`*Auth:* Bearer token from secret \`${actionConfig.auth_secret}\``);
+          }
+          if (parsed.secrets.length > 0) {
+            previewLines.push(`*Secrets to create:* ${parsed.secrets.map((s) => `\`${s.name}\``).join(", ")}`);
+          }
+
+          const payload = JSON.stringify({
+            teamId: command.team_id,
+            userId: command.user_id,
+            skill: {
+              name: parsed.name,
+              description: parsed.description,
+              trigger: parsed.trigger,
+              action: parsed.action,
+            },
+            secrets: parsed.secrets,
+          });
+
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: previewLines.join("\n"),
+            blocks: [
+              {
+                type: "section",
+                text: { type: "mrkdwn", text: previewLines.join("\n") },
+              },
+              {
+                type: "actions",
+                elements: [
+                  {
+                    type: "button",
+                    text: { type: "plain_text", text: "Create" },
+                    action_id: "skill_confirm",
+                    style: "primary",
+                    value: payload,
+                  },
+                  {
+                    type: "button",
+                    text: { type: "plain_text", text: "Cancel" },
+                    action_id: "skill_cancel",
+                  },
+                ],
+              },
+            ],
+          });
+        } catch (error) {
+          console.error("Skill parsing error:", error);
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "Something went wrong parsing that skill description. Try rephrasing it.",
+          });
+        }
+        return;
+      }
+
+      case "list": {
+        const skills = listSkills(command.team_id);
+        if (skills.length === 0) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "No skills configured. Use `/skills new <description>` to create one.",
+          });
+          return;
+        }
+
+        const lines = skills.map((s) => {
+          const trigger = JSON.parse(s.trigger);
+          return `• \`${s.name}\` — ${s.description}\n  _Trigger:_ ${trigger.value}${s.created_by ? ` | _by_ <@${s.created_by}>` : ""}`;
+        });
+        await app.client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: `*Skills:*\n${lines.join("\n")}`,
+        });
+        return;
+      }
+
+      case "delete": {
+        if (!(command.user_id in ALLOWED_USERS)) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "You're not allowed to use this.",
+          });
+          return;
+        }
+
+        if (!arg) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "Usage: `/skills delete <name>`",
+          });
+          return;
+        }
+
+        const deleted = deleteSkill(command.team_id, arg);
+        await app.client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: deleted ? `Skill \`${arg}\` deleted.` : `Skill \`${arg}\` not found.`,
+        });
+        return;
+      }
+
+      case "help":
+      default: {
+        await app.client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: [
+            "*Skills* — custom automations the bot can trigger",
+            "",
+            "`/skills new <description>` — Create a skill from a natural language description",
+            "`/skills list` — List all skills for your team",
+            "`/skills delete <name>` — Delete a skill",
+            "`/skills help` — Show this help",
+            "",
+            "*Example:*",
+            "`/skills new trigger AI evals via https://api.example.com/evals with my-key as auth header when someone asks to run evals`",
+          ].join("\n"),
+        });
+        return;
+      }
+    }
   });
 }

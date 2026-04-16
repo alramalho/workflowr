@@ -197,7 +197,7 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     });
   });
 
-  // --- Web auth (Sign in with Slack via OpenID Connect) ---
+  // --- Web auth (Sign in with Slack via OAuth v2) ---
 
   app.get("/auth/web/start", (_req, res) => {
     if (!config.slack.clientId) {
@@ -207,14 +207,12 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
 
     const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
     const params = new URLSearchParams({
-      response_type: "code",
       client_id: config.slack.clientId,
-      scope: "openid,profile",
+      user_scope: "identity.basic",
       redirect_uri: `${serverUrl}/auth/web/callback`,
-      nonce: Math.random().toString(36).slice(2),
     });
 
-    res.redirect(`https://slack.com/openid/connect/authorize?${params}`);
+    res.redirect(`https://slack.com/oauth/v2/authorize?${params}`);
   });
 
   app.get("/auth/web/callback", async (req, res) => {
@@ -227,8 +225,7 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     try {
       const serverUrl = config.oauthServerUrl ?? `http://localhost:${config.oauthPort}`;
 
-      // Exchange code for OIDC token
-      const tokenResp = await fetch("https://slack.com/api/openid.connect.token", {
+      const resp = await fetch("https://slack.com/api/oauth.v2.access", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -236,29 +233,18 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
           client_secret: config.slack.clientSecret!,
           code,
           redirect_uri: `${serverUrl}/auth/web/callback`,
-          grant_type: "authorization_code",
         }),
       });
 
-      const tokenData = await tokenResp.json() as any;
-      if (!tokenData.ok) {
-        console.error("Web auth OIDC token error:", tokenData.error);
-        res.status(400).send(`Slack auth failed: ${tokenData.error}`);
+      const data = await resp.json() as any;
+      if (!data.ok) {
+        console.error("Web auth OAuth error:", data.error);
+        res.status(400).send(`Slack auth failed: ${data.error}`);
         return;
       }
 
-      // Get user info from OIDC
-      const userResp = await fetch("https://slack.com/api/openid.connect.userInfo", {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
-      });
-      const userData = await userResp.json() as any;
-      if (!userData.ok) {
-        res.status(400).send("Could not fetch user info from Slack.");
-        return;
-      }
-
-      const slackUserId = userData.sub; // OIDC subject = Slack user ID
-      const teamId = userData["https://slack.com/team_id"];
+      const slackUserId = data.authed_user?.id;
+      const teamId = data.team?.id;
       if (!slackUserId || !teamId) {
         res.status(400).send("Could not identify Slack user.");
         return;
@@ -269,7 +255,7 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
         return;
       }
 
-      const name = ALLOWED_USERS[slackUserId] ?? userData.name ?? slackUserId;
+      const name = ALLOWED_USERS[slackUserId] ?? slackUserId;
       const token = await new SignJWT({ slackUserId, teamId, name })
         .setProtectedHeader({ alg: "HS256" })
         .setExpirationTime("30d")

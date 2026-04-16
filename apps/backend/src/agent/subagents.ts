@@ -16,6 +16,7 @@ import { createClaudeCodeTools } from "./tools/claude-code.js";
 import { createNotionTools } from "./tools/notion.js";
 import { createOrgTools } from "./tools/org.js";
 import { createHttpRequestTools } from "./tools/http-request.js";
+import { createSkillTools } from "./tools/skills.js";
 import { buildNotionTreeText } from "../db/notion-pages.js";
 import * as sm from "../integrations/supermemory.js";
 import { saveArtifact } from "../db/artifacts.js";
@@ -520,5 +521,7 @@ export function createOrchestratorTools(ctx: SubagentContext) {
   for (const [k, v] of Object.entries(org)) base[k] = v;
   const http = createHttpRequestTools(ctx);
   for (const [k, v] of Object.entries(http)) base[k] = v;
+  const skillTools = createSkillTools(ctx);
+  for (const [k, v] of Object.entries(skillTools)) base[k] = v;
   return base;
 }
