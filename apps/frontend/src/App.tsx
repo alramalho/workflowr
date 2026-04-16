@@ -19,6 +19,11 @@ function App() {
   if (!user) {
     return <LoginScreen />
   }
+
+  return <AppContent user={user} logout={logout} />
+}
+
+function AppContent({ user, logout }: { user: { name: string }; logout: () => void }) {
   const [data, setData] = useState<OrgTree | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
