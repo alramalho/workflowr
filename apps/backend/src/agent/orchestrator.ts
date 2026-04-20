@@ -10,7 +10,7 @@ import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { findPersonBySlackId } from "../org/propagate.js";
 import { getUserTasks, getTaskSteps } from "../db/tasks.js";
-import { listSkills, parseTrigger } from "../db/skills.js";
+import { listSkills } from "../db/skills.js";
 import { persistStepMessages } from "../queues/step-persistence.js";
 
 function getSystemPrompt() {
@@ -217,11 +217,8 @@ Each person has a "confidence" field (high/medium/low). Low confidence means the
   if (teamId) {
     const skills = listSkills(teamId);
     if (skills.length > 0) {
-      const skillLines = skills.map((s) => {
-        const trigger = parseTrigger(s);
-        return `• skill_${s.name}: ${s.description} (trigger: ${trigger.value})`;
-      });
-      systemPrompt += `\n\n*CUSTOM SKILLS*\nThe team has custom skills available as tools:\n${skillLines.join("\n")}\nWhen a user's request matches a skill's trigger, use the corresponding skill_* tool.`;
+      const skillLines = skills.map((s) => `• ${s.name}: ${s.description}`);
+      systemPrompt += `\n\n*SKILLS*\nYou have team skills available. Use the \`use_skill\` tool to load the full instructions when a situation matches:\n${skillLines.join("\n")}`;
     }
   }
 

@@ -243,12 +243,25 @@ db.exec(`
     team_id     TEXT NOT NULL,
     name        TEXT NOT NULL,
     description TEXT NOT NULL,
-    trigger     TEXT NOT NULL DEFAULT '{}',
-    action      TEXT NOT NULL DEFAULT '{}',
+    content     TEXT NOT NULL DEFAULT '',
     created_by  TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(team_id, name)
   )
 `);
+
+// migrate: skills table from trigger/action to content
+const skillsCols = db.prepare(`PRAGMA table_info(skills)`).all() as Array<{ name: string }>;
+if (skillsCols.some((c) => c.name === "trigger") && !skillsCols.some((c) => c.name === "content")) {
+  db.exec(`ALTER TABLE skills ADD COLUMN content TEXT NOT NULL DEFAULT ''`);
+  // merge old trigger+action into content for existing skills
+  const oldSkills = db.prepare(`SELECT id, description, trigger, action FROM skills`).all() as any[];
+  for (const s of oldSkills) {
+    db.prepare(`UPDATE skills SET content = ? WHERE id = ?`).run(
+      `${s.description}\n\nTrigger: ${s.trigger}\nAction: ${s.action}`,
+      s.id,
+    );
+  }
+}
 
 export default db;

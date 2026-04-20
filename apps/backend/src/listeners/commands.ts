@@ -679,32 +679,19 @@ export function registerCommands(app: App) {
         try {
           const parsed = await parseSkillDescription(arg);
 
-          const actionConfig = parsed.action.config;
           const previewLines = [
             `*Skill Preview*`,
             "",
             `*Name:* \`${parsed.name}\``,
             `*Description:* ${parsed.description}`,
-            `*Trigger:* ${parsed.trigger.type} — ${parsed.trigger.value}`,
-            `*Action:* ${actionConfig.method} ${actionConfig.url}`,
+            `*Content:*`,
+            parsed.content,
           ];
-          if (actionConfig.auth_secret) {
-            previewLines.push(`*Auth:* Bearer token from secret \`${actionConfig.auth_secret}\``);
-          }
-          if (parsed.secrets.length > 0) {
-            previewLines.push(`*Secrets to create:* ${parsed.secrets.map((s) => `\`${s.name}\``).join(", ")}`);
-          }
 
           const payload = JSON.stringify({
             teamId: command.team_id,
             userId: command.user_id,
-            skill: {
-              name: parsed.name,
-              description: parsed.description,
-              trigger: parsed.trigger,
-              action: parsed.action,
-            },
-            secrets: parsed.secrets,
+            skill: parsed,
           });
 
           await app.client.chat.postEphemeral({
@@ -765,8 +752,7 @@ export function registerCommands(app: App) {
         }
 
         const lines = skills.map((s) => {
-          const trigger = JSON.parse(s.trigger);
-          return `• \`${s.name}\` — ${s.description}\n  _Trigger:_ ${trigger.value}${s.created_by ? ` | _by_ <@${s.created_by}>` : ""}`;
+          return `• \`${s.name}\` — ${s.description}${s.created_by ? ` | _by_ <@${s.created_by}>` : ""}`;
         });
         await app.client.chat.postEphemeral({
           channel: command.channel_id,

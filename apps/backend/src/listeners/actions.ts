@@ -886,23 +886,12 @@ Be conversational and specific. Propose concrete steps once you have enough info
     await ack();
     try {
       const payload = JSON.parse((action as any).value);
-      const { teamId, userId, skill, secrets } = payload;
+      const { teamId, userId, skill } = payload;
 
-      for (const s of secrets) {
-        upsertSecret(teamId, s.name, s.value, userId);
-      }
-
-      upsertSkill(
-        teamId,
-        skill.name,
-        skill.description,
-        JSON.stringify(skill.trigger),
-        JSON.stringify(skill.action),
-        userId,
-      );
+      upsertSkill(teamId, skill.name, skill.description, skill.content, userId);
 
       await respond({
-        text: `Skill \`${skill.name}\` created!${secrets.length > 0 ? ` ${secrets.length} secret(s) stored.` : ""} It's now available for me to use.`,
+        text: `Skill \`${skill.name}\` created! It's now available for me to use.`,
         replace_original: true,
         response_type: "ephemeral",
       });
@@ -968,36 +957,23 @@ Be conversational and specific. Propose concrete steps once you have enough info
       });
 
       const parsed = await parseSkillDescription(
-        payload.skill.description,
+        payload.skill.description ?? payload.skill.content,
         { previous: payload.skill, feedback: correction },
       );
 
-      const actionConfig = parsed.action.config;
       const previewLines = [
         `*Skill Preview (corrected)*`,
         "",
         `*Name:* \`${parsed.name}\``,
         `*Description:* ${parsed.description}`,
-        `*Trigger:* ${parsed.trigger.type} — ${parsed.trigger.value}`,
-        `*Action:* ${actionConfig.method} ${actionConfig.url}`,
+        `*Content:*`,
+        parsed.content,
       ];
-      if (actionConfig.auth_secret) {
-        previewLines.push(`*Auth:* Bearer token from secret \`${actionConfig.auth_secret}\``);
-      }
-      if (parsed.secrets.length > 0) {
-        previewLines.push(`*Secrets to create:* ${parsed.secrets.map((s) => `\`${s.name}\``).join(", ")}`);
-      }
 
       const newPayload = JSON.stringify({
         teamId: payload.teamId,
         userId: payload.userId,
-        skill: {
-          name: parsed.name,
-          description: parsed.description,
-          trigger: parsed.trigger,
-          action: parsed.action,
-        },
-        secrets: parsed.secrets,
+        skill: parsed,
       });
 
       await client.chat.postMessage({
