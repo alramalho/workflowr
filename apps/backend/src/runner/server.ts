@@ -126,7 +126,7 @@ function handleRunnerMessage(conn: ConnectedRunner, msg: any) {
       }
 
       // handle initial scan result
-      if (msg.taskId.startsWith("scan-")) {
+      if (msg.taskId.startsWith("scan-") && msg.result && !msg.error) {
         handleScanResult(conn, msg.result);
       }
       break;
@@ -373,7 +373,7 @@ if [[ "\$OSTYPE" == "darwin"* ]]; then
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/$(node -v)/bin</string>
+    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v)/bin:$HOME/.n/bin</string>
   </dict>
 </dict>
 </plist>

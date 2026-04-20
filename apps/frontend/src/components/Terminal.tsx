@@ -287,7 +287,7 @@ export function Terminal({
         <span className="cmd-prompt">$</span>
         <div className="input-wrapper">
           <div className="input-highlight" aria-hidden>
-            {input ? highlightCommand(input) : <span className="input-placeholder">{loading ? 'running...' : 'ask a question...'}</span>}
+            {input ? <>{highlightCommand(input)}{'\u00a0'}</> : <span className="input-placeholder">{loading ? 'running...' : 'ask a question...'}</span>}
           </div>
           <textarea
             ref={inputRef}

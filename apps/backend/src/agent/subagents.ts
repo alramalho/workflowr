@@ -387,12 +387,14 @@ function createCodebaseExploreAgentTool(ctx: SubagentContext) {
       const ws = workspaces[workspace];
       if (!ws) return { error: `Unknown workspace "${workspace}". Available: ${workspaceNames.join(", ")}` };
 
+      const rules = fetchToolRules("codebase_explore", ctx);
+
       const instruction = dedent`
         IMPORTANT: This is a READ-ONLY exploration. Do NOT modify any files, create branches, or run commands that change state.
 
         You are exploring the "${workspace}" codebase: ${ws.description}
 
-        ${guidelines ? `Previously discovered guidelines about this codebase:\n${guidelines}\n` : ""}
+        ${guidelines ? `Previously discovered guidelines about this codebase:\n${guidelines}\n` : ""}${rules ?? ""}
         Question: ${question}
 
         Explore the codebase to answer this question. Search for relevant files, read code, understand data models and business logic. Be thorough but focused.

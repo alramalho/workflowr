@@ -23,6 +23,7 @@ import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
 import { logUsage } from "../db/usage-log.js";
 import { upsertSkill } from "../db/skills.js";
 import { upsertSecret } from "../db/secrets.js";
+import { parseSkillDescription } from "../agent/skills-parser.js";
 import { isRunnerConnected, getConnectedRunnerDirectories } from "../runner/server.js";
 import { getRunnerForUser } from "../db/runners.js";
 
@@ -915,13 +916,131 @@ Be conversational and specific. Propose concrete steps once you have enough info
     }
   });
 
+  app.action("skill_correct", async ({ action, ack, body, client }) => {
+    await ack();
+    const payload = (action as any).value;
+    await client.views.open({
+      trigger_id: (body as any).trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "skill_correct_modal",
+        private_metadata: payload,
+        title: { type: "plain_text", text: "Correct skill" },
+        submit: { type: "plain_text", text: "Re-parse" },
+        blocks: [
+          {
+            type: "input",
+            block_id: "correction_block",
+            label: { type: "plain_text", text: "What should be different?" },
+            element: {
+              type: "plain_text_input",
+              action_id: "correction_input",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "e.g. the trigger should be keyword-based, not on every message" },
+            },
+          },
+        ],
+      },
+    });
+  });
+
   app.action("skill_cancel", async ({ ack, respond }) => {
     await ack();
     await respond({
-      text: "Skill creation cancelled.",
+      text: "Skill creation rejected.",
       replace_original: true,
       response_type: "ephemeral",
     });
+  });
+
+  app.view("skill_correct_modal", async ({ ack, view, body, client }) => {
+    await ack();
+    const correction = view.state.values.correction_block.correction_input.value?.trim();
+    if (!correction) return;
+
+    const payload = JSON.parse(view.private_metadata);
+    const userId = body.user.id;
+
+    try {
+      await client.chat.postMessage({
+        channel: userId,
+        text: ":hourglass_flowing_sand: Re-parsing with your corrections...",
+      });
+
+      const parsed = await parseSkillDescription(
+        payload.skill.description,
+        { previous: payload.skill, feedback: correction },
+      );
+
+      const actionConfig = parsed.action.config;
+      const previewLines = [
+        `*Skill Preview (corrected)*`,
+        "",
+        `*Name:* \`${parsed.name}\``,
+        `*Description:* ${parsed.description}`,
+        `*Trigger:* ${parsed.trigger.type} — ${parsed.trigger.value}`,
+        `*Action:* ${actionConfig.method} ${actionConfig.url}`,
+      ];
+      if (actionConfig.auth_secret) {
+        previewLines.push(`*Auth:* Bearer token from secret \`${actionConfig.auth_secret}\``);
+      }
+      if (parsed.secrets.length > 0) {
+        previewLines.push(`*Secrets to create:* ${parsed.secrets.map((s) => `\`${s.name}\``).join(", ")}`);
+      }
+
+      const newPayload = JSON.stringify({
+        teamId: payload.teamId,
+        userId: payload.userId,
+        skill: {
+          name: parsed.name,
+          description: parsed.description,
+          trigger: parsed.trigger,
+          action: parsed.action,
+        },
+        secrets: parsed.secrets,
+      });
+
+      await client.chat.postMessage({
+        channel: userId,
+        text: previewLines.join("\n"),
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: previewLines.join("\n") },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Create" },
+                action_id: "skill_confirm",
+                style: "primary",
+                value: newPayload,
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Correct" },
+                action_id: "skill_correct",
+                value: newPayload,
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Reject" },
+                action_id: "skill_cancel",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      console.error("Skill correction error:", error);
+      await client.chat.postMessage({
+        channel: userId,
+        text: "Something went wrong re-parsing the skill. Try again.",
+      });
+    }
   });
 
   // handle modal submission

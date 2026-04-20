@@ -10,6 +10,7 @@ const TOOL_RULE_CANDIDATES = [
   "linear_agent",
   "github_agent",
   "google_calendar_agent",
+  "codebase_explore",
 ] as const;
 
 async function classifyToolRules(content: string): Promise<string[]> {
@@ -30,6 +31,7 @@ Tools:
 - linear_agent: Linear issue management (creating, updating, commenting on issues)
 - github_agent: GitHub operations (PRs, commits, repos)
 - google_calendar_agent: Calendar operations (events, scheduling)
+- codebase_explore: Local/runner codebase exploration via daemon (which workspaces are relevant, where domain concepts live, how to explore product source)
 
 Return the tools this rule applies to. Return empty array if it's general knowledge or a fact (not a behavioral rule).`,
     });

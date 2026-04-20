@@ -30,7 +30,18 @@ const skillSchema = z.object({
 
 export type ParsedSkill = z.infer<typeof skillSchema>;
 
-export async function parseSkillDescription(description: string): Promise<ParsedSkill> {
+export async function parseSkillDescription(description: string, correction?: { previous: ParsedSkill; feedback: string }): Promise<ParsedSkill> {
+  const correctionBlock = correction ? dedent`
+
+    PREVIOUS ATTEMPT (user wants corrections):
+    ${JSON.stringify(correction.previous, null, 2)}
+
+    USER FEEDBACK:
+    ${correction.feedback}
+
+    Apply the user's corrections to the previous result. Keep everything the user didn't mention unchanged.
+  ` : "";
+
   const result = await generateObject({
     model: PARSER_MODEL,
     schema: skillSchema,
@@ -51,6 +62,7 @@ export async function parseSkillDescription(description: string): Promise<Parsed
 
       User description:
       ${description}
+      ${correctionBlock}
     `,
     abortSignal: AbortSignal.timeout(15_000),
   });

@@ -534,7 +534,7 @@ export function registerCommands(app: App) {
       channel: command.channel_id,
       user: command.user_id,
       text: [
-        "*Daemon Setup*",
+        "👾 *Daemon Setup*",
         "",
         "Run this on your machine from the directory where your projects live (e.g. `~/workspace`):",
         "",
@@ -673,7 +673,7 @@ export function registerCommands(app: App) {
         await app.client.chat.postEphemeral({
           channel: command.channel_id,
           user: command.user_id,
-          text: ":hourglass_flowing_sand: Parsing your skill description...",
+          text: `> ${arg}\n:hourglass_flowing_sand: Parsing your skill description...`,
         });
 
         try {
@@ -728,8 +728,15 @@ export function registerCommands(app: App) {
                   },
                   {
                     type: "button",
-                    text: { type: "plain_text", text: "Cancel" },
+                    text: { type: "plain_text", text: "Correct" },
+                    action_id: "skill_correct",
+                    value: payload,
+                  },
+                  {
+                    type: "button",
+                    text: { type: "plain_text", text: "Reject" },
                     action_id: "skill_cancel",
+                    style: "danger",
                   },
                 ],
               },
