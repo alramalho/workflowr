@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   getChannelHistory,
   getThreadReplies,
+  postMessage,
   createCanvas,
   createChannelCanvas,
   editCanvas,
@@ -34,6 +35,21 @@ export function createSlackTools(ctx: SubagentContext) {
         threadTs: z.string(),
       }),
       execute: async ({ channel, threadTs }) => getThreadReplies(app, channel, threadTs),
+    }),
+    slack_post_message: tool({
+      description: "Send a message to a Slack channel or DM. Use this to post standalone messages (not thread replies).",
+      inputSchema: z.object({
+        channel: z.string().describe("Channel or DM ID to post to"),
+        text: z.string().describe("Message text (supports Slack mrkdwn)"),
+      }),
+      execute: async ({ channel, text }) => {
+        if (conversationHistory) {
+          const gate = await hasExplicitConfirmation(conversationHistory, `Post message to channel ${channel}`);
+          if (!gate.confirmed) return { error: `Operation blocked: ${gate.reason}. Ask the user to confirm.` };
+        }
+        const result = await postMessage(app, channel, text);
+        return { ok: true, channel, ts: result.ts };
+      },
     }),
     slack_list_channel_canvases: tool({
       description: "List canvases (tabs) attached to a Slack channel. Returns canvas IDs, titles, and human-readable channel name.",
