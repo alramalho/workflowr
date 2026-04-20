@@ -21,6 +21,7 @@ import { buildNotionTreeText } from "../db/notion-pages.js";
 import * as sm from "../integrations/supermemory.js";
 import { saveArtifact } from "../db/artifacts.js";
 import { getToolRules } from "../db/tool-rules.js";
+import { getOrgByTeamId } from "../db/orgs.js";
 import type { SubagentContext } from "./tools/types.js";
 
 function fetchToolRules(toolName: string, ctx: SubagentContext): string | null {
@@ -103,6 +104,10 @@ function createSlackAgentTool(ctx: SubagentContext) {
       const contextLines = [];
       if (ctx.channelId) contextLines.push(`Current channel ID: ${ctx.channelId}`);
       if (ctx.threadTs) contextLines.push(`Current thread timestamp: ${ctx.threadTs}`);
+      if (ctx.teamId) {
+        const org = getOrgByTeamId(ctx.teamId);
+        if (org?.slack_domain) contextLines.push(`Slack workspace domain: ${org.slack_domain} (use for constructing message links: https://${org.slack_domain}.slack.com/archives/{channelId}/p{ts})`);
+      }
       const contextBlock = contextLines.length ? `\n\nConversation context:\n${contextLines.join("\n")}` : "";
 
       const rules = fetchToolRules("slack_agent", ctx);

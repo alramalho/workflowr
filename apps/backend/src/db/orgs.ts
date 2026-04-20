@@ -8,6 +8,7 @@ export interface Org {
   description: string | null;
   industry: string | null;
   location: string | null;
+  slack_domain: string | null;
   github_org: string | null;
   linear_team_id: string | null;
   metadata: string;
@@ -21,14 +22,15 @@ export function createOrg(
     description?: string;
     industry?: string;
     location?: string;
+    slackDomain?: string;
     githubOrg?: string;
     linearTeamId?: string;
   } = {},
   metadata: Record<string, unknown> = {}
 ): Org {
   const result = db.prepare(`
-    INSERT INTO orgs (name, team_id, url, description, industry, location, github_org, linear_team_id, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO orgs (name, team_id, url, description, industry, location, slack_domain, github_org, linear_team_id, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name,
     fields.teamId ?? null,
@@ -36,6 +38,7 @@ export function createOrg(
     fields.description ?? null,
     fields.industry ?? null,
     fields.location ?? null,
+    fields.slackDomain ?? null,
     fields.githubOrg ?? null,
     fields.linearTeamId ?? null,
     JSON.stringify(metadata),
@@ -64,6 +67,7 @@ export function updateOrg(
     description?: string;
     industry?: string;
     location?: string;
+    slackDomain?: string;
     githubOrg?: string;
     linearTeamId?: string;
     metadata?: Record<string, unknown>;
@@ -79,6 +83,7 @@ export function updateOrg(
       description = ?,
       industry = ?,
       location = ?,
+      slack_domain = ?,
       github_org = ?,
       linear_team_id = ?,
       metadata = ?
@@ -89,6 +94,7 @@ export function updateOrg(
     fields.description !== undefined ? fields.description : org.description,
     fields.industry !== undefined ? fields.industry : org.industry,
     fields.location !== undefined ? fields.location : org.location,
+    fields.slackDomain !== undefined ? fields.slackDomain : org.slack_domain,
     fields.githubOrg ?? org.github_org,
     fields.linearTeamId ?? org.linear_team_id,
     fields.metadata ? JSON.stringify(fields.metadata) : org.metadata,

@@ -554,6 +554,7 @@ export function registerActions(app: App) {
 
     const url = view.state.values.org_url_block.org_url.value?.trim() ?? "";
     const teamId = body.team?.id;
+    const teamDomain = (body.team as any)?.domain as string | undefined;
     const userId = body.user.id;
 
     if (!url || !teamId) return;
@@ -574,6 +575,7 @@ export function registerActions(app: App) {
           description: info.description,
           industry: info.industry,
           location: info.location,
+          slackDomain: teamDomain,
         });
       } else {
         createOrg(info.name, {
@@ -582,6 +584,7 @@ export function registerActions(app: App) {
           description: info.description,
           industry: info.industry,
           location: info.location,
+          slackDomain: teamDomain,
         });
       }
 

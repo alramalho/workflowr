@@ -5,6 +5,7 @@ import { hasExplicitConfirmation } from "../confirmation.js";
 import { allFilesInDir } from "../../org/tree.js";
 import { propagatePerson, findPersonBySlackId } from "../../org/propagate.js";
 import { downloadSlackImage } from "../../integrations/translate.js";
+import { getOrgByTeamId } from "../../db/orgs.js";
 import type { SubagentContext } from "./types.js";
 
 export function createLinearTools(ctx: SubagentContext) {
@@ -57,7 +58,8 @@ export function createLinearTools(ctx: SubagentContext) {
               const permalink = await app.client.chat.getPermalink({ channel: channelId, message_ts: threadTs });
               threadUrl = permalink.permalink!;
             } catch {
-              threadUrl = `https://slack.com/archives/${channelId}/p${threadTs.replace(".", "")}`;
+              const domain = teamId ? getOrgByTeamId(teamId)?.slack_domain : undefined;
+              threadUrl = `https://${domain ?? "slack"}.slack.com/archives/${channelId}/p${threadTs.replace(".", "")}`;
             }
             await linear.attachSlackThread(issue.id, threadUrl);
           } catch (e) {

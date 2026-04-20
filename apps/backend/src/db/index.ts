@@ -61,6 +61,9 @@ if (!orgTableCols.some((c) => c.name === "industry")) {
 if (!orgTableCols.some((c) => c.name === "location")) {
   db.exec(`ALTER TABLE orgs ADD COLUMN location TEXT`);
 }
+if (!orgTableCols.some((c) => c.name === "slack_domain")) {
+  db.exec(`ALTER TABLE orgs ADD COLUMN slack_domain TEXT`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS thread_reads (
