@@ -22,6 +22,7 @@ import * as sm from "../integrations/supermemory.js";
 import { saveArtifact } from "../db/artifacts.js";
 import { getToolRules } from "../db/tool-rules.js";
 import { getOrgByTeamId } from "../db/orgs.js";
+import { resolveSlackIds } from "../integrations/slack-resolve.js";
 import type { SubagentContext } from "./tools/types.js";
 
 function fetchToolRules(toolName: string, ctx: SubagentContext): string | null {
@@ -127,7 +128,8 @@ function createSlackAgentTool(ctx: SubagentContext) {
         For file uploads, use the current channel/thread as default — do NOT ask the user for channel or thread IDs.${contextBlock}
       `, instruction, tools);
       const answer = rules ? text + rules : text;
-      return { answer, internals };
+      const legend = await resolveSlackIds(ctx.app, { answer, internals });
+      return Object.keys(legend).length > 0 ? { answer, internals, legend } : { answer, internals };
     },
   });
 }
@@ -326,6 +328,9 @@ function createDatabaseAgentTool(ctx: SubagentContext) {
           }
         }
       }
+
+      const legend = await resolveSlackIds(ctx.app, result);
+      if (Object.keys(legend).length > 0) result.legend = legend;
 
       return result;
     },

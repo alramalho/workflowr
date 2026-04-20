@@ -267,6 +267,11 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
         return;
       }
 
+      const userAccessToken = data.authed_user?.access_token;
+      if (userAccessToken) {
+        upsertSlackToken(slackUserId, userAccessToken);
+      }
+
       const name = ALLOWED_USERS[slackUserId] ?? slackUserId;
       const token = await new SignJWT({ slackUserId, teamId, name })
         .setProtectedHeader({ alg: "HS256" })

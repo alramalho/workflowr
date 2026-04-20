@@ -134,4 +134,7 @@ SEEDREMOTE
   ssh $SSH_OPTS "$USER@$HOST" "cd $REMOTE_DIR && docker compose restart bot"
 fi
 
+echo "==> Deploying frontend to Vercel..."
+(cd apps/frontend && npx vercel --prod --yes)
+
 echo "==> Deploy complete!"

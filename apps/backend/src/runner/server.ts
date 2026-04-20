@@ -315,7 +315,7 @@ fi
 TOKEN="\${1:?Usage: install.sh <pairing-token>}"
 
 # get working directory
-read -p "Working directory [\$(pwd)]: " CWD
+read -p "Working directory [\$(pwd)]: " CWD < /dev/tty
 CWD="\${CWD:-\$(pwd)}"
 CWD=$(cd "$CWD" && pwd) # resolve to absolute path
 

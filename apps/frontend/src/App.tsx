@@ -5,13 +5,31 @@ import { FileTree } from './components/FileTree'
 import { FileViewer } from './components/FileViewer'
 import { TabBar } from './components/TabBar'
 import { Terminal } from './components/Terminal'
+import { CommandPalette } from './components/CommandPalette'
+import { TerminalSquare } from 'lucide-react'
 import { useAuth, authHeaders, LoginScreen } from './auth'
 import type { OrgTree, CommandResult, ToolStep } from './types'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3847'
+const MIN_DESKTOP_WIDTH = 768
 
 function App() {
   const { user, loading: authLoading, logout } = useAuth()
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < MIN_DESKTOP_WIDTH)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < MIN_DESKTOP_WIDTH)
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  if (isMobile) {
+    return (
+      <div className="app loading-screen">
+        <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>Desktop only.</span>
+      </div>
+    )
+  }
 
   if (authLoading) {
     return <div className="app loading-screen"><span className="pixel-spinner" /></div>
@@ -35,6 +53,29 @@ function AppContent({ user, logout }: { user: { name: string }; logout: () => vo
   const [liveToolSteps, setLiveToolSteps] = useState<ToolStep[]>([])
   const [liveStatus, setLiveStatus] = useState<string | null>(null)
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([])
+  const [cmdOpen, setCmdOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [pendingAIQuery, setPendingAIQuery] = useState<string | null>(null)
+
+  const treeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (e.key === 'k') {
+        e.preventDefault()
+        setCmdOpen((o) => !o)
+      } else if (e.key === '\\') {
+        e.preventDefault()
+        setSidebarOpen((o) => !o)
+      } else if (e.key === 'b') {
+        e.preventDefault()
+        treeRef.current?.querySelector<HTMLElement>('.file-tree')?.focus()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   useEffect(() => {
     fetch(`${API_URL}/api/org-tree`, { headers: authHeaders() })
@@ -194,6 +235,19 @@ function AppContent({ user, logout }: { user: { name: string }; logout: () => vo
     return map
   }, [data])
 
+  // Handle pending AI query from command palette
+  useEffect(() => {
+    if (pendingAIQuery && data) {
+      handleCommand(pendingAIQuery)
+      setPendingAIQuery(null)
+    }
+  }, [pendingAIQuery, data, handleCommand])
+
+  const handleAskAI = useCallback((query: string) => {
+    setSidebarOpen(true)
+    setPendingAIQuery(query)
+  }, [])
+
   if (loading) {
     return <div className="app loading-screen"><span className="pixel-spinner" /></div>
   }
@@ -208,56 +262,75 @@ function AppContent({ user, logout }: { user: { name: string }; logout: () => vo
 
   return (
     <div className="app">
+      <CommandPalette
+        files={data.files}
+        onSelect={(path) => openTab(path, false)}
+        onAskAI={handleAskAI}
+        open={cmdOpen}
+        onOpenChange={setCmdOpen}
+      />
       <div className="user-bar">
         <span>{user.name}</span>
         <button onClick={logout}>sign out</button>
       </div>
-      <Group orientation="horizontal" id="main-layout">
-        <Panel defaultSize={20} minSize={15} id="tree-panel">
-          <FileTree
-            files={data.files}
-            selectedPath={activeTab}
-            onSelect={handleSelect}
-          />
-        </Panel>
-        <Separator className="resize-handle" />
-        <Panel defaultSize={80} minSize={40} id="right-panel">
-          <Group orientation="vertical" id="right-layout">
-            <Panel defaultSize={65} minSize={20} id="viewer-panel">
-              <div className="viewer-container">
-                {tabs.length > 0 && (
-                  <TabBar
-                    tabs={tabs}
-                    activeTab={activeTab}
-                    onSelect={setActiveTab}
-                    onClose={closeTab}
-                  />
-                )}
-                <div className="viewer-body">
-                  {activeContent ? (
-                    <FileViewer path={activeTab!} content={activeContent} onNavigate={(p) => openTab(p, true)} slackIdMap={slackIdMap} />
-                  ) : (
-                    <div className="empty-viewer">
-                      <span>Select a file to view</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </Panel>
-            <Separator className="resize-handle-h" />
-            <Panel defaultSize={35} minSize={15} id="terminal-panel">
-              <Terminal
-                history={history}
-                onCommand={handleCommand}
-                loading={cmdLoading}
-                pendingCommand={pendingCommand}
-                liveToolSteps={liveToolSteps}
-                liveStatus={liveStatus}
+      <div className="main-row">
+        <Group orientation="horizontal" key={sidebarOpen ? 'with-sidebar' : 'no-sidebar'}>
+          <Panel defaultSize={20} minSize={15}>
+            <div ref={treeRef}>
+              <FileTree
+                files={data.files}
+                selectedPath={activeTab}
+                onSelect={handleSelect}
               />
-            </Panel>
-          </Group>
-        </Panel>
-      </Group>
+            </div>
+          </Panel>
+          <Separator className="resize-handle" />
+          <Panel defaultSize={sidebarOpen ? 40 : 80} minSize={30}>
+            <div className="viewer-container">
+              {tabs.length > 0 && (
+                <TabBar
+                  tabs={tabs}
+                  activeTab={activeTab}
+                  onSelect={setActiveTab}
+                  onClose={closeTab}
+                />
+              )}
+              <div className="viewer-body">
+                {activeContent ? (
+                  <FileViewer path={activeTab!} content={activeContent} onNavigate={(p) => openTab(p, true)} slackIdMap={slackIdMap} />
+                ) : (
+                  <div className="empty-viewer">
+                    <span>Select a file or press Cmd+K</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+          {sidebarOpen && (
+            <>
+              <Separator className="resize-handle" />
+              <Panel defaultSize={40} minSize={25}>
+                <Terminal
+                  history={history}
+                  onCommand={handleCommand}
+                  loading={cmdLoading}
+                  pendingCommand={pendingCommand}
+                  liveToolSteps={liveToolSteps}
+                  liveStatus={liveStatus}
+                  onClose={() => setSidebarOpen(false)}
+                />
+              </Panel>
+            </>
+          )}
+        </Group>
+        {!sidebarOpen && (
+          <div className="sidebar-rail" onClick={() => setSidebarOpen(true)}>
+            <TerminalSquare size={13} />
+            <span>terminal</span>
+            <kbd className="shortcut-hint">&#8984;\</kbd>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

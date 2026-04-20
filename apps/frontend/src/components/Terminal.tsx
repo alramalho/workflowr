@@ -89,7 +89,7 @@ function renderAsciiTable(tableLines: string[]): JSX.Element {
 }
 
 function renderOutput(text: string): JSX.Element {
-  const lines = text.split('\n')
+  const lines = text.replace(/<br\s*\/?>/gi, '\n').split('\n')
   const elements: JSX.Element[] = []
   let i = 0
 
@@ -176,6 +176,7 @@ export function Terminal({
   pendingCommand,
   liveToolSteps,
   liveStatus,
+  onClose,
 }: {
   history: CommandResult[]
   onCommand: (cmd: string) => void
@@ -183,16 +184,28 @@ export function Terminal({
   pendingCommand: string | null
   liveToolSteps: ToolStep[]
   liveStatus: string | null
+  onClose?: () => void
 }) {
   const [input, setInput] = useState('')
   const [cmdHistory, setCmdHistory] = useState<string[]>([])
   const [historyIdx, setHistoryIdx] = useState(-1)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight)
   }, [history, loading, pendingCommand, liveToolSteps, liveStatus])
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+      inputRef.current.style.height = inputRef.current.scrollHeight + 'px'
+    }
+  }, [input])
 
   const submit = () => {
     const cmd = input.trim()
@@ -204,7 +217,7 @@ export function Terminal({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()
     } else if (e.key === 'ArrowUp') {
@@ -232,6 +245,7 @@ export function Terminal({
       <div className="terminal-header">
         <TerminalSquare size={13} />
         <span>terminal</span>
+        {onClose && <button className="terminal-close" onClick={onClose}>&times;</button>}
       </div>
       <div className="terminal-output" ref={scrollRef}>
         {history.map((r) => (
@@ -275,14 +289,14 @@ export function Terminal({
           <div className="input-highlight" aria-hidden>
             {input ? highlightCommand(input) : <span className="input-placeholder">{loading ? 'running...' : 'ask a question...'}</span>}
           </div>
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={loading}
             autoFocus
+            rows={1}
           />
         </div>
       </div>

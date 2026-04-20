@@ -534,13 +534,13 @@ export function registerCommands(app: App) {
       channel: command.channel_id,
       user: command.user_id,
       text: [
-        "*Runner Setup*",
+        "*Daemon Setup*",
         "",
-        "Run this on your machine to connect your codebase to workflowr:",
+        "Run this on your machine from the directory where your projects live (e.g. `~/workspace`):",
         "",
         `\`\`\`${installCmd}\`\`\``,
         "",
-        "It will install a background service that auto-starts on login. Once connected, workflowr can explore your code when you ask questions.",
+        "It will ask which directory to use, then install a background service that auto-starts on login. Once connected, workflowr can explore your code when you ask questions.",
       ].join("\n"),
     });
   });

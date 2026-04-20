@@ -146,6 +146,11 @@ export function FileTree({
     el?.scrollIntoView({ block: 'nearest' })
   }, [focusIdx])
 
+  // auto-focus on mount
+  useEffect(() => {
+    containerRef.current?.focus()
+  }, [])
+
   return (
     <div className="file-tree" tabIndex={0} onKeyDown={handleKeyDown} ref={containerRef}>
       <div className="tree-header">
