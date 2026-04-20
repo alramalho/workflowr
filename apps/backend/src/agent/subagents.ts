@@ -357,7 +357,7 @@ function createCodebaseExploreAgentTool(ctx: SubagentContext) {
     return tool({
       description: "Explore the product codebase. Currently unavailable — no workspaces connected.",
       inputSchema: z.object({ question: z.string() }),
-      execute: async () => ({ error: "No codebase workspaces available. The user needs to connect a runner with /setup-runner." }),
+      execute: async () => ({ error: "No codebase workspaces available. The user needs to connect a runner with /setup-daemon." }),
     });
   }
 

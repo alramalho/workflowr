@@ -166,7 +166,7 @@ export function buildTaskBlocks(userId: string, teamId?: string): any[] {
     } else {
       blocks.push({
         type: "section",
-        text: { type: "mrkdwn", text: `:white_circle: *No runner set up* — use \`/setup-runner\` to connect your codebase` },
+        text: { type: "mrkdwn", text: `:white_circle: *No runner set up* — use \`/setup-daemon\` to connect your codebase` },
       });
     }
     blocks.push({ type: "divider" });

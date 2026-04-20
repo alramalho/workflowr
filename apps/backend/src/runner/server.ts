@@ -202,7 +202,7 @@ export function sendTaskToRunner(
     }
   }
 
-  return Promise.reject(new Error("No connected runner found for this user. Set one up with /setup-runner."));
+  return Promise.reject(new Error("No connected runner found for this user. Set one up with /setup-daemon."));
 }
 
 export function isRunnerConnected(userId: string, teamId: string): boolean {

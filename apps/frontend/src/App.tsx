@@ -178,16 +178,6 @@ function AppContent({ user, logout }: { user: { name: string }; logout: () => vo
     setHistory((prev) => [...prev, { id, command, output, toolSteps, timestamp: Date.now(), durationMs: Date.now() - cmdStartTime.current }])
   }
 
-  if (loading) {
-    return <div className="app loading-screen"><span className="pixel-spinner" /></div>
-  }
-  if (error) {
-    return <div className="app loading-screen error">Failed to load: {error}</div>
-  }
-  if (!data || Object.keys(data.files).length === 0) {
-    return <div className="app loading-screen dim">No org data yet. Run /setup-workflowr in Slack.</div>
-  }
-
   const slackIdMap = useMemo(() => {
     const map = new Map<string, { name: string; path: string }>()
     if (!data) return map
@@ -203,6 +193,16 @@ function AppContent({ user, logout }: { user: { name: string }; logout: () => vo
     }
     return map
   }, [data])
+
+  if (loading) {
+    return <div className="app loading-screen"><span className="pixel-spinner" /></div>
+  }
+  if (error) {
+    return <div className="app loading-screen error">Failed to load: {error}</div>
+  }
+  if (!data || Object.keys(data.files).length === 0) {
+    return <div className="app loading-screen dim">No org data yet. Run /setup-workflowr in Slack.</div>
+  }
 
   const activeContent = activeTab ? data.files[activeTab] : null
 

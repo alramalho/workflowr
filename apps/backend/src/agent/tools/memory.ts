@@ -55,6 +55,7 @@ export function createMemoryTools(ctx: SubagentContext) {
           if (teamId) tags.push(sm.orgTag(teamId));
           const results = await sm.searchMemories(query, tags, 5);
           return results.map((r) => ({
+            id: r.documentId,
             title: r.title,
             content: r.chunks?.map((c) => c.content).join("\n") ?? r.summary,
             score: r.score,
@@ -113,8 +114,8 @@ export function createMemoryTools(ctx: SubagentContext) {
           }
 
           const base = action === "reconcile"
-            ? { stored: true, scope, reconciled: true, memories }
-            : { stored: true, scope, content: rephrased };
+            ? { stored: true, scope, reconciled: true, memoriesCount: memories!.length }
+            : { stored: true, scope };
 
           return boundTools.length > 0
             ? { ...base, toolRules: boundTools }
@@ -126,23 +127,14 @@ export function createMemoryTools(ctx: SubagentContext) {
       },
     }),
     memory_delete: tool({
-      description: "Delete a specific memory by searching for it. Use when the user says a memory is wrong and needs to be removed (not just updated). Search first with memory_search to confirm which memory to delete.",
+      description: "Delete a memory by its ID. Always use memory_search first to find the correct ID before deleting.",
       inputSchema: z.object({
-        query: z.string().describe("Search query to find the memory to delete"),
-        scope: z.enum(["user", "org"]).describe("'user' for personal, 'org' for team-wide"),
+        id: z.string().describe("The memory ID obtained from memory_search"),
       }),
-      execute: async ({ query, scope }) => {
+      execute: async ({ id }) => {
         try {
-          const tag = scope === "user" ? sm.userTag(slackUserId) : teamId ? sm.orgTag(teamId) : sm.userTag(slackUserId);
-          const results = await sm.searchMemories(query, [tag], 3);
-          if (results.length === 0) {
-            return { deleted: false, reason: "no matching memories found" };
-          }
-
-          const top = results[0];
-          const content = top.chunks?.map((c) => c.content).join("\n") ?? top.summary ?? top.title;
-          await sm.deleteMemory(top.documentId);
-          return { deleted: true, removedContent: content, score: top.score };
+          await sm.deleteMemory(id);
+          return { deleted: true, id };
         } catch (e: any) {
           console.error("[memory_delete] failed:", e);
           return { deleted: false, error: e.message ?? "unknown error" };

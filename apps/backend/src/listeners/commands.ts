@@ -503,9 +503,9 @@ export function registerCommands(app: App) {
     });
   });
 
-  app.command("/setup-runner", async ({ command, ack }) => {
+  app.command("/setup-daemon", async ({ command, ack }) => {
     await ack();
-    logCmd(command, "/setup-runner");
+    logCmd(command, "/setup-daemon");
 
     if (!(command.user_id in ALLOWED_USERS)) {
       await app.client.chat.postEphemeral({
