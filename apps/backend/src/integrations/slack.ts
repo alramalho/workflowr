@@ -19,6 +19,40 @@ export async function postMessage(
   });
 }
 
+export async function listChannels(
+  app: App,
+  opts: { nameFilter?: string; memberOnly?: boolean; limit?: number } = {}
+) {
+  const { nameFilter, memberOnly = false, limit = 100 } = opts;
+  const needle = nameFilter?.toLowerCase();
+  const results: { id: string; name: string; is_member: boolean; is_private: boolean }[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const res = await app.client.conversations.list({
+      types: "public_channel,private_channel",
+      exclude_archived: true,
+      limit: 200,
+      cursor,
+    });
+    for (const ch of res.channels ?? []) {
+      if (!ch.id || !ch.name) continue;
+      if (memberOnly && !ch.is_member) continue;
+      if (needle && !ch.name.toLowerCase().includes(needle)) continue;
+      results.push({
+        id: ch.id,
+        name: ch.name,
+        is_member: !!ch.is_member,
+        is_private: !!ch.is_private,
+      });
+      if (results.length >= limit) return results;
+    }
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+
+  return results;
+}
+
 export async function getChannelHistory(
   app: App,
   channel: string,

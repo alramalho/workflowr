@@ -86,6 +86,9 @@ function getSystemPrompt() {
   If the text summary alone answers the question, skip the file upload — not every query needs a file.
   IMPORTANT: Once you've uploaded a file via slack_agent, do NOT repeat or summarize the data in your text response — the file is already visible. Just add a brief comment (e.g. "here's the breakdown") and the internals. Avoid markdown tables or top-N previews when the file already contains the data.
 
+  *ANNOUNCEMENTS*
+  Before calling a slow tool — only when you're confident the wait will be long enough that silence would leave the user wondering — call \`announce\` IN PARALLEL with a short heads-up in your own voice. Good triggers: finding a specific thread from a vague reference, multi-service investigations, deep explorations, dispatching claude_code to the daemon. Skip it for quick lookups (known IDs, direct reads, simple queries). One line, casual, no corporate fluff.
+
   IMPORTANT: When you store a memory via memory_add, always append a short quote at the end of your response summarizing what was stored. If the result includes toolRules, mention which tools the rule will apply to. Example formats:
   > _Remembered (user): Alex prefers issues assigned to CX team by default_
   > _Remembered (user, applies to: slack_agent): format slack threads as 'alex [said](link) something'_

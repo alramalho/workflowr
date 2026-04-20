@@ -15,7 +15,7 @@ import { countFiles } from "../org/tree.js";
 import { logUsage, getUsageSummary } from "../db/usage-log.js";
 import { createRunner, getRunnerForUser } from "../db/runners.js";
 import { upsertSecret, deleteSecret as removeSecret, listSecrets } from "../db/secrets.js";
-import { listSkills, deleteSkill } from "../db/skills.js";
+import { listSkills, deleteSkill, getSkill } from "../db/skills.js";
 import { parseSkillDescription } from "../agent/skills-parser.js";
 
 const REPOS = [{ owner: "chatarmin", repo: "slack-workflows" }];
@@ -751,13 +751,120 @@ export function registerCommands(app: App) {
           return;
         }
 
-        const lines = skills.map((s) => {
-          return `• \`${s.name}\` — ${s.description}${s.created_by ? ` | _by_ <@${s.created_by}>` : ""}`;
-        });
+        const blocks: any[] = [
+          { type: "section", text: { type: "mrkdwn", text: "*Skills:*" } },
+        ];
+        for (const s of skills) {
+          const btnValue = JSON.stringify({ teamId: command.team_id, name: s.name });
+          blocks.push({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `• \`${s.name}\` — ${s.description}${s.created_by ? ` | _by_ <@${s.created_by}>` : ""}`,
+            },
+          });
+          blocks.push({
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Edit" },
+                action_id: "skill_edit_open",
+                value: btnValue,
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Delete" },
+                action_id: "skill_delete_btn",
+                style: "danger",
+                value: btnValue,
+                confirm: {
+                  title: { type: "plain_text", text: `Delete ${s.name}?` },
+                  text: { type: "plain_text", text: "This removes the skill. You can recreate it later." },
+                  confirm: { type: "plain_text", text: "Delete" },
+                  deny: { type: "plain_text", text: "Cancel" },
+                },
+              },
+            ],
+          });
+        }
+
         await app.client.chat.postEphemeral({
           channel: command.channel_id,
           user: command.user_id,
-          text: `*Skills:*\n${lines.join("\n")}`,
+          text: "Your skills",
+          blocks,
+        });
+        return;
+      }
+
+      case "edit": {
+        if (!(command.user_id in ALLOWED_USERS)) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "You're not allowed to use this.",
+          });
+          return;
+        }
+
+        if (!arg) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: "Usage: `/skills edit <name>`",
+          });
+          return;
+        }
+
+        if (!("trigger_id" in command)) return;
+
+        const existing = getSkill(command.team_id, arg);
+        if (!existing) {
+          await app.client.chat.postEphemeral({
+            channel: command.channel_id,
+            user: command.user_id,
+            text: `Skill \`${arg}\` not found.`,
+          });
+          return;
+        }
+
+        await app.client.views.open({
+          trigger_id: command.trigger_id,
+          view: {
+            type: "modal",
+            callback_id: "skill_correct_modal",
+            private_metadata: JSON.stringify({
+              teamId: command.team_id,
+              userId: command.user_id,
+              skill: { name: existing.name, description: existing.description, content: existing.content },
+            }),
+            title: { type: "plain_text", text: "Edit skill" },
+            submit: { type: "plain_text", text: "Re-parse" },
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: [
+                    `*Editing:* \`${existing.name}\``,
+                    `*Current description:* ${existing.description}`,
+                  ].join("\n"),
+                },
+              },
+              {
+                type: "input",
+                block_id: "correction_block",
+                label: { type: "plain_text", text: "What should be different?" },
+                element: {
+                  type: "plain_text_input",
+                  action_id: "correction_input",
+                  multiline: true,
+                  placeholder: { type: "plain_text", text: "e.g. also trigger on keyword X, or tighten the description" },
+                },
+              },
+            ],
+          },
         });
         return;
       }
@@ -800,6 +907,7 @@ export function registerCommands(app: App) {
             "",
             "`/skills new <description>` — Create a skill from a natural language description",
             "`/skills list` — List all skills for your team",
+            "`/skills edit <name>` — Edit an existing skill by describing what to change",
             "`/skills delete <name>` — Delete a skill",
             "`/skills help` — Show this help",
             "",

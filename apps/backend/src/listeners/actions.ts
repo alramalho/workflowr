@@ -21,7 +21,7 @@ import {
 } from "../db/tasks.js";
 import { saveBotCall, getBotCallByMessageTs } from "../db/bot-calls.js";
 import { logUsage } from "../db/usage-log.js";
-import { upsertSkill } from "../db/skills.js";
+import { upsertSkill, getSkill, deleteSkill } from "../db/skills.js";
 import { upsertSecret } from "../db/secrets.js";
 import { parseSkillDescription } from "../agent/skills-parser.js";
 import { isRunnerConnected, getConnectedRunnerDirectories } from "../runner/server.js";
@@ -938,6 +938,62 @@ Be conversational and specific. Propose concrete steps once you have enough info
     await respond({
       text: "Skill creation rejected.",
       replace_original: true,
+      response_type: "ephemeral",
+    });
+  });
+
+  app.action("skill_edit_open", async ({ action, ack, body, client }) => {
+    await ack();
+    const { teamId, name } = JSON.parse((action as any).value);
+    const existing = getSkill(teamId, name);
+    if (!existing) return;
+
+    await client.views.open({
+      trigger_id: (body as any).trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "skill_correct_modal",
+        private_metadata: JSON.stringify({
+          teamId,
+          userId: body.user.id,
+          skill: { name: existing.name, description: existing.description, content: existing.content },
+        }),
+        title: { type: "plain_text", text: "Edit skill" },
+        submit: { type: "plain_text", text: "Re-parse" },
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: [
+                `*Editing:* \`${existing.name}\``,
+                `*Current description:* ${existing.description}`,
+              ].join("\n"),
+            },
+          },
+          {
+            type: "input",
+            block_id: "correction_block",
+            label: { type: "plain_text", text: "What should be different?" },
+            element: {
+              type: "plain_text_input",
+              action_id: "correction_input",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "e.g. also trigger on keyword X, or tighten the description" },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  app.action("skill_delete_btn", async ({ action, ack, respond }) => {
+    await ack();
+    const { teamId, name } = JSON.parse((action as any).value);
+    const deleted = deleteSkill(teamId, name);
+    await respond({
+      text: deleted ? `Skill \`${name}\` deleted.` : `Skill \`${name}\` not found.`,
+      replace_original: false,
       response_type: "ephemeral",
     });
   });

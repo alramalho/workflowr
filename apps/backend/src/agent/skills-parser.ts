@@ -6,7 +6,7 @@ const PARSER_MODEL = "google/gemini-3-flash-preview";
 
 const skillSchema = z.object({
   name: z.string().describe("Short snake_case identifier for the skill (e.g. ticket_lookup)"),
-  description: z.string().describe("One-line summary of what the skill does and when to use it"),
+  description: z.string().describe("One-line summary. MUST include both what the skill does AND explicit trigger conditions (e.g. 'Use when...', 'Triggers on...') so the agent knows when to load the full skill without reading the content"),
   content: z.string().describe("Full instructions for the agent — step-by-step playbook of what to do when this skill applies. Written as clear directives."),
 });
 
@@ -32,7 +32,7 @@ export async function parseSkillDescription(description: string, correction?: { 
 
       A skill is a playbook for an AI agent — it tells the agent what to do in a specific situation.
       - "name" is a short snake_case identifier
-      - "description" is a one-line summary (shown in an index so the agent knows when to load the full skill)
+      - "description" is a one-line summary shown in an index — it MUST include explicit trigger conditions ("Use when...", "Triggers on...") so the agent can decide whether to load the skill without reading the content. Pull trigger signals (keywords, formats like #XXXX, situations) from the user's description into this line.
       - "content" is the full step-by-step instructions the agent should follow when the skill applies
 
       The content should be written as clear directives to the agent, preserving all specifics from the user's description (tool names, script names, parameters, etc).

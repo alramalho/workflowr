@@ -121,6 +121,7 @@ function createSlackAgentTool(ctx: SubagentContext) {
         • "Edit the canvas" → Missing: which canvas, what changes to make
         • "Send a CSV" → Missing: what data to include, filename
 
+        To find a channel by name (e.g. "chatarmin-x-straede"), use slack_list_channels with a nameFilter — do NOT use slack_search_messages for channel lookup.
         Before editing a canvas, always look up its sections first.
         Before creating a channel canvas, always list existing canvases first.
         When looking for canvases in a channel, always call slack_list_channel_canvases first — tab/bookmarked canvases (source: "bookmark") are the most important as they are the team's primary working documents. Prioritize those over canvases found via files_list.
@@ -511,6 +512,25 @@ export function createOrchestratorTools(ctx: SubagentContext) {
             console.warn("[subagent] second opinion aborted (timeout)");
           }
           return { confidence, reasoning, next_tools, secondOpinion: null };
+        }
+      },
+    }),
+    announce: tool({
+      description: "Post a short heads-up to the current thread when you're about to do heavy work that you're confident will take real time — searches without clear context (finding a thread from a vague reference), multi-service investigations, deep explorations, daemon dispatch. Call IN PARALLEL with the slow tool. Use conservatively: only when you're confident the wait will be long enough that silence would leave the user wondering. Skip for quick lookups (known IDs, direct reads, simple queries).",
+      inputSchema: z.object({
+        message: z.string().describe("One casual line in your own voice, e.g. 'ok gimme a sec — need to dig through #cs-support for that thread'"),
+      }),
+      execute: async ({ message }) => {
+        if (!ctx.channelId) return { posted: false, reason: "no channel context" };
+        try {
+          await ctx.app.client.chat.postMessage({
+            channel: ctx.channelId,
+            thread_ts: ctx.threadTs,
+            text: message,
+          });
+          return { posted: true };
+        } catch (err: any) {
+          return { posted: false, error: err.message };
         }
       },
     }),

@@ -9,6 +9,7 @@ import {
   editCanvas,
   listChannelCanvases,
   lookupCanvasSections,
+  listChannels,
 } from "../../integrations/slack.js";
 import { getSlackToken } from "../../db/slack-tokens.js";
 import { hasExplicitConfirmation } from "../confirmation.js";
@@ -20,6 +21,17 @@ export function createSlackTools(ctx: SubagentContext) {
   const listedChannels = new Set<string>();
 
   return {
+    slack_list_channels: tool({
+      description:
+        "List Slack channels the bot can see. Use `nameFilter` to find a channel by substring (e.g. 'straede' → 'chatarmin-x-straede'). Set `memberOnly: true` to only return channels the bot is a member of. Prefer this over slack_search_messages when you just need to resolve a channel name to an ID.",
+      inputSchema: z.object({
+        nameFilter: z.string().optional().describe("Case-insensitive substring match on channel name"),
+        memberOnly: z.boolean().optional().describe("Only channels the bot has joined"),
+        limit: z.number().optional().describe("Max results (default 100)"),
+      }),
+      execute: async ({ nameFilter, memberOnly, limit }) =>
+        listChannels(app, { nameFilter, memberOnly, limit }),
+    }),
     slack_get_channel_history: tool({
       description: "Read recent messages from a Slack channel",
       inputSchema: z.object({
