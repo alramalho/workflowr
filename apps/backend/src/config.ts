@@ -43,7 +43,7 @@ export const config = {
     apiKey: optionalEnv("NOTION_API_KEY"),
   },
   redis: {
-    url: optionalEnv("REDIS_URL") ?? "redis://localhost:6379",
+    url: optionalEnv("REDIS_URL") ?? "redis://:changeme@localhost:6379",
   },
   oauthPort: parseInt(optionalEnv("OAUTH_PORT") ?? "3847", 10),
   oauthServerUrl: optionalEnv("OAUTH_SERVER_URL"),
