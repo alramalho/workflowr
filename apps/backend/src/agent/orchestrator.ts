@@ -111,13 +111,32 @@ function getSystemPrompt() {
 export async function shouldRespond(threadContext: string, latestMessage: string): Promise<boolean> {
   const result = await generateObject({
     model: "google/gemini-3-flash-preview",
-    schema: z.object({ shouldRespond: z.boolean() }),
+    schema: z.object({
+      shouldRespond: z.boolean(),
+      reason: z.string(),
+    }),
     prompt: dedent`
       You are a gating mechanism for a Slack bot that was mentioned or is listening in a thread.
       Decide if the latest message requires a response from the bot.
 
-      Respond YES if: the message is a question, request, or task directed at the bot.
-      Respond NO if: the bot is only mentioned as attribution or credit (e.g. "powered by @bot"), the message is an acknowledgment (e.g. "ok", "thanks", "got it"), the user is talking to someone else, or there's nothing actionable for the bot.
+      In thread context, "workflowr (you)" means the bot. Treat replies addressed to "you" after
+      "workflowr (you)" has participated as potentially addressed to the bot, even without an @mention.
+
+      Respond YES if:
+      - the latest message is a question, request, correction, complaint, instruction, or task directed at the bot
+      - the user tells the bot to change behavior, stop doing something, apologize, explain itself, retry, or fix a mistake
+      - the latest message uses second-person wording ("you", "your", "will you", "can you") and the thread context makes the bot a plausible addressee
+
+      Respond NO if:
+      - the message is only an acknowledgment with no follow-up needed (e.g. "ok", "thanks", "got it", "lol")
+      - the user is clearly talking to another human
+      - the bot is only mentioned as attribution or credit (e.g. "powered by @bot")
+      - there is nothing for the bot to answer or do
+
+      Examples:
+      - Context: "workflowr (you): my bad, I posted publicly"; Latest: "well dont do it again will you" => YES
+      - Context: "workflowr (you): here is the report"; Latest: "thanks" => NO
+      - Context: "<@U123>: can you take this?"; Latest: "yeah on it" => NO
 
       Thread context:
       ${threadContext}
@@ -127,6 +146,7 @@ export async function shouldRespond(threadContext: string, latestMessage: string
     `,
   });
 
+  console.log(`[shouldRespond] ${result.object.shouldRespond ? "YES" : "NO"}: ${result.object.reason}`);
   return result.object.shouldRespond;
 }
 
