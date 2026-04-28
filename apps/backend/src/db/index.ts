@@ -212,20 +212,6 @@ db.exec(`
 `);
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS org_files (
-    team_id     TEXT NOT NULL,
-    path        TEXT NOT NULL,
-    parent_path TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    frontmatter TEXT NOT NULL DEFAULT '{}',
-    content     TEXT NOT NULL DEFAULT '',
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (team_id, path)
-  )
-`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_org_files_parent ON org_files(team_id, parent_path)`);
-
-db.exec(`
   CREATE TABLE IF NOT EXISTS secrets (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     team_id     TEXT NOT NULL,

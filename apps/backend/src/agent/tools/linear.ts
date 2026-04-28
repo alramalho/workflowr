@@ -128,7 +128,7 @@ export function createLinearTools(ctx: SubagentContext) {
         const members = await linear.listMembers();
         try {
           if (teamId) {
-            const people = allFilesInDir(teamId, "people").filter((f) => f.name !== "_index.mdx" && !f.frontmatter.linear_id);
+            const people = (await allFilesInDir(teamId, "people")).filter((f) => f.name !== "_index.mdx" && !f.frontmatter.linear_id);
             if (people.length > 0) {
               const slackEmails = new Map<string, string>();
               for (const p of people) {
@@ -142,9 +142,9 @@ export function createLinearTools(ctx: SubagentContext) {
                 if (!lm.email) continue;
                 const slackId = slackEmails.get(lm.email.toLowerCase());
                 if (slackId) {
-                  const person = findPersonBySlackId(teamId, slackId);
+                  const person = await findPersonBySlackId(teamId, slackId);
                   if (person) {
-                    propagatePerson(teamId, { slackId, name: person.frontmatter.name, linearId: lm.id });
+                    await propagatePerson(teamId, { slackId, name: person.frontmatter.name, linearId: lm.id });
                   }
                 }
               }

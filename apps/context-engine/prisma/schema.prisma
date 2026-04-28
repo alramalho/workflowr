@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../data/context.db"
+}
+
+model ContextPage {
+  id          String   @id @default(cuid())
+  teamId      String   @map("team_id")
+  path        String
+  parentPath  String   @map("parent_path")
+  name        String
+  entityType  String?  @map("entity_type")
+  frontmatter String   @default("{}")
+  content     String   @default("")
+  links       String   @default("[]")
+  source      String?
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([teamId, path])
+  @@index([teamId, parentPath])
+  @@index([teamId, entityType])
+  @@map("context_pages")
+}
+
+model ContextCommunication {
+  id          String   @id @default(cuid())
+  teamId      String   @map("team_id")
+  hash        String
+  channelId   String?  @map("channel_id")
+  threadTs    String?  @map("thread_ts")
+  commType    String   @default("slack_thread") @map("comm_type")
+  payload     String
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@unique([teamId, hash])
+  @@index([teamId, channelId, threadTs])
+  @@map("context_communications")
+}

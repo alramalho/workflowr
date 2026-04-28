@@ -7,13 +7,13 @@ import { ALLOWED_USERS } from "../listeners/events.js";
 
 const STALE_DAYS = 15;
 
-function resolveSlackUser(
+async function resolveSlackUser(
   assignee: { id: string; name: string },
-): string | null {
+): Promise<string | null> {
   const orgs = getAllOrgs();
   for (const org of orgs) {
     if (!org.team_id) continue;
-    const person = findPersonByLinearId(org.team_id, assignee.id);
+    const person = await findPersonByLinearId(org.team_id, assignee.id);
     if (person?.frontmatter.slack_id) return person.frontmatter.slack_id;
   }
 
@@ -40,7 +40,7 @@ export async function sendStaleIssueDigests(app: App) {
 
   for (const issue of issues) {
     if (!issue.assignee) continue;
-    const slackId = resolveSlackUser(issue.assignee);
+    const slackId = await resolveSlackUser(issue.assignee);
     if (!slackId) continue;
 
     const list = byAssignee.get(slackId) ?? [];

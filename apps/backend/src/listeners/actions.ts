@@ -603,9 +603,9 @@ export function registerActions(app: App) {
       });
 
       // bootstrap org awareness in the background
-      bootstrapOrgAwareness(app, teamId).then((count) => {
-        const peopleIndex = cat(teamId, "people/_index.mdx") ?? "";
-        const teamsIndex = cat(teamId, "teams/_index.mdx") ?? "";
+      bootstrapOrgAwareness(app, teamId).then(async (count) => {
+        const peopleIndex = (await cat(teamId, "people/_index.mdx")) ?? "";
+        const teamsIndex = (await cat(teamId, "teams/_index.mdx")) ?? "";
         client.chat.postMessage({
           channel: userId,
           text: `Org awareness bootstrap complete — analyzed ${count} threads.\n\n${teamsIndex}\n\n${peopleIndex}`,

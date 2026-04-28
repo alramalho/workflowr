@@ -14,30 +14,30 @@ const app = new App({
 async function main() {
   console.log(`\n--- backfill test (team: ${TEAM_ID}) ---\n`);
 
-  initializeTree(TEAM_ID);
-  const before = countFiles(TEAM_ID);
+  await initializeTree(TEAM_ID);
+  const before = await countFiles(TEAM_ID);
   console.log(`Files before: ${before}`);
 
   const threads = await bootstrapOrgAwareness(app, TEAM_ID);
-  const after = countFiles(TEAM_ID);
+  const after = await countFiles(TEAM_ID);
   console.log(`\nFiles after: ${after} (+${after - before})`);
   console.log(`Threads analyzed: ${threads}`);
 
   console.log(`\n--- tree ---`);
-  console.log(ls(TEAM_ID, ".").join("\n"));
+  console.log((await ls(TEAM_ID, ".")).join("\n"));
 
   console.log(`\n--- people/_index.mdx ---`);
-  console.log(cat(TEAM_ID, "people/_index.mdx") ?? "(empty)");
+  console.log((await cat(TEAM_ID, "people/_index.mdx")) ?? "(empty)");
 
   console.log(`\n--- teams/_index.mdx ---`);
-  console.log(cat(TEAM_ID, "teams/_index.mdx") ?? "(empty)");
+  console.log((await cat(TEAM_ID, "teams/_index.mdx")) ?? "(empty)");
 
   // show first person file as example
-  const people = ls(TEAM_ID, "people");
+  const people = await ls(TEAM_ID, "people");
   const firstPerson = people.find((p) => p !== "_index.mdx");
   if (firstPerson) {
     console.log(`\n--- people/${firstPerson} ---`);
-    console.log(cat(TEAM_ID, `people/${firstPerson}`));
+    console.log(await cat(TEAM_ID, `people/${firstPerson}`));
   }
 
   process.exit(0);

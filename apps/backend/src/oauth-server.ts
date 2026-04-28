@@ -46,10 +46,10 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     }
   });
 
-  app.get("/debug/org", (req, res) => {
+  app.get("/debug/org", async (req, res) => {
     const teamId = (req.query.teamId as string) ?? getAllOrgs().find((o) => o.team_id)?.team_id;
     if (!teamId) { res.json([]); return; }
-    const people = allFilesInDir(teamId, "people").filter((f) => f.name !== "_index.mdx");
+    const people = (await allFilesInDir(teamId, "people")).filter((f) => f.name !== "_index.mdx");
     res.json(people.map((p) => ({ path: p.path, ...p.frontmatter, updatedAt: p.updated_at })));
   });
 
@@ -69,24 +69,24 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     }
   }
 
-  app.get("/api/org-tree", requireAuth, (req, res) => {
+  app.get("/api/org-tree", requireAuth, async (req, res) => {
     const user = (req as any).user;
     const teamId = (req.query.teamId as string) ?? user.teamId ?? getAllOrgs().find((o) => o.team_id)?.team_id;
     if (!teamId) { res.json({ tree: [], files: {} }); return; }
-    const entries = ls(teamId, ".");
+    const entries = await ls(teamId, ".");
     const files: Record<string, string> = {};
-    const collectFiles = (dir: string) => {
-      for (const entry of ls(teamId, dir)) {
+    const collectFiles = async (dir: string): Promise<void> => {
+      for (const entry of await ls(teamId, dir)) {
         const path = dir === "." ? entry : `${dir}/${entry}`;
         if (entry.endsWith("/")) {
-          collectFiles(path.replace(/\/$/, ""));
+          await collectFiles(path.replace(/\/$/, ""));
         } else {
-          const content = cat(teamId, path);
+          const content = await cat(teamId, path);
           if (content) files[path] = content;
         }
       }
     };
-    collectFiles(".");
+    await collectFiles(".");
     res.json({ tree: entries, files });
   });
 
@@ -177,10 +177,10 @@ export function startOAuthServer(port: number, opts: ServerOptions) {
     // clear all thread locks and re-bootstrap
     clearThreadLocks();
 
-    bootstrapOrgAwareness(opts.slackApp, slackTeamId).then((count) => {
+    bootstrapOrgAwareness(opts.slackApp, slackTeamId).then(async (count) => {
       console.log(`[org-rewatch] Done: analyzed ${count} threads for workspace ${slackTeamId}`);
       if (notifySlackId) {
-        const summary = [cat(slackTeamId, "teams/_index.mdx"), cat(slackTeamId, "people/_index.mdx")].filter(Boolean).join("\n\n");
+        const summary = [await cat(slackTeamId, "teams/_index.mdx"), await cat(slackTeamId, "people/_index.mdx")].filter(Boolean).join("\n\n");
         opts.slackApp.client.chat.postMessage({
           channel: notifySlackId,
           text: `Org rewatch complete — analyzed ${count} threads.\n\n${summary}`,

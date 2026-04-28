@@ -11,21 +11,11 @@ import {
   findPersonBySlackId,
   initializeTree,
   propagateOverview,
-  type PersonSignal,
 } from "./propagate.js";
 import { allFilesInDir } from "./tree.js";
+import { ingestSlackThread } from "context-engine";
 
 const MIN_MESSAGES = 3;
-const MAX_TEAM_NAME_LENGTH = 30;
-const TEAM_NAME_RE = /^[A-Za-z][A-Za-z0-9 &\-/]+$/;
-
-function isValidTeamName(name: string): boolean {
-  const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_TEAM_NAME_LENGTH) return false;
-  if (!TEAM_NAME_RE.test(trimmed)) return false;
-  if (/^(slackId|role|teams|reportsTo|writingStyle|isExternal|representativeExampleMessage|unknown)/i.test(trimmed)) return false;
-  return true;
-}
 
 function extractDomainName(urlOrDomain: string): string {
   const cleaned = urlOrDomain.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
@@ -55,7 +45,7 @@ export async function ensureOrgPerson(
   teamId?: string,
 ): Promise<{ name: string; slackId: string; isExternal: boolean }> {
   if (teamId) {
-    const existing = findPersonBySlackId(teamId, slackId);
+    const existing = await findPersonBySlackId(teamId, slackId);
     if (existing) {
       return {
         name: existing.frontmatter.name,
@@ -80,8 +70,8 @@ export async function ensureOrgPerson(
   }
 
   if (teamId) {
-    initializeTree(teamId);
-    propagatePerson(teamId, { slackId, name, isExternal, email });
+    await initializeTree(teamId);
+    await propagatePerson(teamId, { slackId, name, isExternal, email });
   }
 
   return { name, slackId, isExternal };
@@ -173,151 +163,6 @@ export async function editOrgFromInstruction(
   return result.object;
 }
 
-interface ExistingProfile {
-  slackId: string;
-  name: string;
-  role?: string;
-  reportsTo?: string;
-  writingStyle?: string;
-  representativeExampleMessage?: string;
-  isExternal: boolean;
-  teams: string[];
-}
-
-function getExistingProfiles(teamId: string): ExistingProfile[] {
-  const people = allFilesInDir(teamId, "people").filter((f) => f.name !== "_index.mdx");
-  return people.map((p) => ({
-    slackId: p.frontmatter.slack_id,
-    name: p.frontmatter.name,
-    role: p.frontmatter.role,
-    reportsTo: p.frontmatter.reports_to,
-    writingStyle: p.frontmatter.writing_style,
-    representativeExampleMessage: p.frontmatter.representative_example_message,
-    isExternal: !!p.frontmatter.is_external,
-    teams: (p.frontmatter.teams as string[] | undefined) ?? [],
-  }));
-}
-
-async function extractOrgSignals(
-  threadContent: string,
-  existingMembers: ExistingProfile[],
-  org?: Org,
-): Promise<
-  Array<{
-    slackId: string;
-    role?: string;
-    reportsTo?: string;
-    writingStyle?: string;
-    representativeExampleMessage?: string;
-    isExternal?: boolean;
-    teams?: string[];
-  }>
-> {
-  const profilesContext =
-    existingMembers.length > 0
-      ? existingMembers
-          .map((m) => {
-            const teamsStr = m.teams.length > 0 ? m.teams.join(", ") : "unknown";
-            const style = (m.writingStyle ?? "unknown").slice(0, 200);
-            const example = (m.representativeExampleMessage ?? "unknown").slice(0, 200);
-            return `• ${m.name} (${m.slackId}): role=${m.role ?? "unknown"}, teams=${teamsStr}, reportsTo=${m.reportsTo ?? "unknown"}, writingStyle=${style}, isExternal=${m.isExternal ? "yes" : "no"}, representativeExampleMessage=${example}`;
-          })
-          .join("\n")
-      : "No existing profiles yet.";
-
-  const existingTeams = allFilesInDir(org ? String(org.team_id) : "", "teams")
-    .filter((f) => f.name !== "_index.mdx")
-    .map((t) => t.frontmatter.name as string);
-  const teamsContext = existingTeams.length > 0
-    ? `\nKnown teams: ${existingTeams.join(", ")}`
-    : "";
-
-  const result = await withRetry(() =>
-    generateObject({
-      model: "openai/gpt-5.4-mini",
-      abortSignal: AbortSignal.timeout(30_000),
-      schema: z.object({
-        members: z.array(
-          z.object({
-            slackId: z.string(),
-            role: z.string().nullable(),
-            reportsTo: z.string().nullable(),
-            writingStyle: z.string().nullable(),
-            representativeExampleMessage: z.string().nullable(),
-            isExternal: z.boolean().nullable(),
-            teams: z.array(z.string()).nullable(),
-          }),
-        ),
-      }),
-      prompt: dedent`
-      You are incrementally building organizational profiles from Slack threads.
-      Your job is to REFINE and ADD to existing profiles, not replace them.
-      Only report findings you have genuine signal for from THIS thread. Do not guess.
-
-      ${org ? `Organization: ${org.name}${org.description ? ` — ${org.description}` : ""}${org.industry ? ` (${org.industry})` : ""}${org.location ? `, based in ${org.location}` : ""}` : "Organization: Unknown"}
-
-      Existing org profiles:
-      ${profilesContext}${teamsContext}
-
-      Thread messages:
-      ${threadContent}
-
-      For each participant where you have NEW signal, extract:
-
-      1. role: Their job function or title. Look for signals like responsibilities mentioned,
-         domain expertise shown, decisions they make. Only set if you see clear evidence.
-         If a role already exists, KEEP IT unless you have strong contradictory evidence.
-         When refining, build on the existing description (e.g. "Frontend Engineer" → "Frontend Engineer, focused on design system") rather than replacing with a synonym.
-
-      2. reportsTo: The slack_id of their apparent manager/lead. Look for signals like:
-         asking for approval, being assigned work, deferring decisions, saying "my manager".
-         Only set if there's clear evidence. If already set, only change it if you see strong evidence of a different reporting line.
-
-      3. writingStyle: How they communicate in 1-2 sentences. Note tone (formal/casual),
-         message length, emoji usage, whether they ask questions or give directions, etc.
-         If there's an existing writingStyle, refine it by incorporating new observations into the existing description rather than rewriting from scratch.
-
-      4. isExternal: Whether this person is external to the organization.
-         This is mostly determined automatically from Slack guest status, so only set this if you have
-         strong evidence that contradicts the current value (e.g. someone marked as internal who clearly
-         works for a different company). In most cases, skip this field entirely.
-
-      5. teams: Which internal team(s) this person belongs to (e.g. ["AI", "Engineering"], ["Success"]).
-         Look for signals like: the domain they work on, channels they're active in, projects they reference.
-         Use existing known teams when possible. Only create a new team name if there's clear evidence of one not yet tracked.
-         If teams are already assigned and still accurate, don't include this field.
-
-      6. representativeExampleMessage: Pick one actual message from this thread that best
-         exemplifies this person's writing style. Copy it verbatim. This should capture their
-         tone, casing, punctuation habits, emoji usage, etc. Only set when you also set or
-         refine writingStyle. If the existing example already captures their style well, don't replace it.
-
-      Rules:
-      - Only include participants where you have genuine NEW signal from this thread
-      - If a participant's existing profile already captures what you see, SKIP them entirely
-      - NEVER replace a field value with a mere rephrasing — only update when new information adds meaningful detail or corrects something wrong
-      - For reportsTo, use the slack_id (format: U followed by alphanumeric), not the name
-      - Return an empty members array if no new insights were found
-    `,
-    }),
-  );
-
-  const inputTokens = result.usage.inputTokens ?? 0;
-  const outputTokens = result.usage.outputTokens ?? 0;
-  console.log(`[org-awareness] ${inputTokens} in / ${outputTokens} out tokens`);
-
-  // coerce nulls to undefined for downstream consumers
-  return result.object.members.map((m) => ({
-    slackId: m.slackId,
-    role: m.role ?? undefined,
-    reportsTo: m.reportsTo ?? undefined,
-    writingStyle: m.writingStyle ?? undefined,
-    representativeExampleMessage: m.representativeExampleMessage ?? undefined,
-    isExternal: m.isExternal ?? undefined,
-    teams: m.teams ?? undefined,
-  }));
-}
-
 async function runBatched<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
   for (let i = 0; i < items.length; i += concurrency) {
     const batch = items.slice(i, i + concurrency);
@@ -328,7 +173,7 @@ async function runBatched<T>(items: T[], concurrency: number, fn: (item: T) => P
 export async function bootstrapOrgAwareness(app: App, teamId: string): Promise<number> {
   console.log(`[org-awareness] Bootstrapping org awareness for team ${teamId}`);
 
-  initializeTree(teamId);
+  await initializeTree(teamId);
 
   const channelIds: string[] = [];
   let cursor: string | undefined;
@@ -395,7 +240,7 @@ export async function bootstrapOrgAwareness(app: App, teamId: string): Promise<n
 
   // known externals from tree
   const knownExternals = new Set(
-    allFilesInDir(teamId, "people")
+    (await allFilesInDir(teamId, "people"))
       .filter((f) => f.name !== "_index.mdx" && f.frontmatter.is_external)
       .map((f) => f.frontmatter.slack_id as string),
   );
@@ -494,51 +339,40 @@ export async function analyzeThread(
   if (participantIds.length === 0) return;
 
   // ensure all participants exist in the tree
-  const personMap = new Map<string, { name: string; slackId: string }>();
+  const personMap = new Map<string, { name: string; slackId: string; isExternal: boolean }>();
   for (const id of participantIds) {
     const person = await ensureOrgPerson(app, id, teamId);
     personMap.set(id, person);
   }
 
-  const threadContent = replies
-    .filter((r: any) => r.text)
-    .slice(0, 30) // cap at 30 messages to keep payload reasonable
-    .map((r: any) => {
-      const person = personMap.get(r.user);
-      const name = person?.name ?? r.user;
-      return `${name} (${r.user}): ${r.text}`;
-    })
-    .join("\n");
-
-  const existingMembers = teamId ? getExistingProfiles(teamId) : [];
-  const org = teamId ? getOrgByTeamId(teamId) : undefined;
-
-  console.log(`[org-awareness] Extracting signals for thread ${threadTs} (${replies.length} messages, ${participantIds.length} participants)`);
-  const updates = await extractOrgSignals(threadContent, existingMembers, org);
-
   if (!teamId) return;
 
-  for (const update of updates) {
-    const existing = findPersonBySlackId(teamId, update.slackId);
-    if (!existing) continue;
-
-    const overrides: Record<string, boolean> = existing.frontmatter.user_overrides ?? {};
-    const signal: PersonSignal = {
-      slackId: update.slackId,
-      name: existing.frontmatter.name,
-    };
-
-    if (update.role && !overrides.role) signal.role = update.role;
-    if (update.reportsTo && !overrides.reports_to) signal.reportsTo = update.reportsTo;
-    if (update.writingStyle) signal.writingStyle = update.writingStyle.slice(0, 750);
-    if (update.representativeExampleMessage) signal.representativeExampleMessage = update.representativeExampleMessage.slice(0, 300);
-    if (update.isExternal !== undefined) signal.isExternal = update.isExternal;
-
-    if (update.teams && update.teams.length > 0 && !overrides.teams) {
-      const validTeams = update.teams.filter(isValidTeamName);
-      if (validTeams.length > 0) signal.teams = validTeams;
-    }
-
-    propagatePerson(teamId, signal);
-  }
+  const org = getOrgByTeamId(teamId);
+  console.log(`[org-awareness] Ingesting thread ${threadTs} into context engine (${replies.length} messages, ${participantIds.length} participants)`);
+  await ingestSlackThread({
+    teamId,
+    channelId,
+    threadTs,
+    org: org
+      ? {
+          name: org.name,
+          url: org.url ?? undefined,
+          description: org.description ?? undefined,
+          industry: org.industry ?? undefined,
+          location: org.location ?? undefined,
+        }
+      : undefined,
+    participants: [...personMap.values()],
+    messages: replies
+      .filter((r: any) => r.user && r.text)
+      .map((r: any) => {
+        const person = personMap.get(r.user);
+        return {
+          slackId: r.user as string,
+          name: person?.name ?? r.user,
+          text: r.text as string,
+          ts: r.ts as string | undefined,
+        };
+      }),
+  });
 }

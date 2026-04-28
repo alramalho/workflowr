@@ -37,15 +37,15 @@ function formatTimeAgo(ts: string): string {
   return `${days}d ago`;
 }
 
-function formatReactions(m: any): string {
+async function formatReactions(m: any): Promise<string> {
   if (!m.reactions?.length) return "";
-  const entries = m.reactions.map((r: any) => {
-    const names = (r.users ?? []).map((u: string) => {
-      const person = findPersonBySlackId(m.team, u);
+  const entries = await Promise.all(m.reactions.map(async (r: any) => {
+    const names = await Promise.all((r.users ?? []).map(async (u: string) => {
+      const person = await findPersonBySlackId(m.team, u);
       return person?.frontmatter.name ?? ALLOWED_USERS[u] ?? `<@${u}>`;
-    });
+    }));
     return `${r.name}: [${names.join(", ")}]`;
-  });
+  }));
   return `\n> reactions: {${entries.join(", ")}}`;
 }
 
@@ -149,9 +149,9 @@ export function registerEvents(app: App) {
       if (threadTs) {
         const replies = await getThreadReplies(app, channel, threadTs);
         const otherMessages = replies.filter((m) => m.ts !== message.ts);
-        const threadContext = otherMessages
-          .map((m) => {
-            let line = `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${formatReactions(m)}`;
+        const threadContext = (await Promise.all(otherMessages
+          .map(async (m) => {
+            let line = `[${formatTimeAgo(m.ts!)}] ${senderLabel(m)}: ${m.text}${await formatReactions(m)}`;
             if ((m as any).files && Array.isArray((m as any).files)) {
               const imgs = (m as any).files
                 .filter((f: any) => SUPPORTED_IMAGE_TYPES.has(f.mimetype))
@@ -159,7 +159,7 @@ export function registerEvents(app: App) {
               if (imgs.length) line += ` ${imgs.join(" ")}`;
             }
             return line;
-          })
+          })))
           .join("\n");
         if (threadContext) context = `Thread context:\n${threadContext}`;
 

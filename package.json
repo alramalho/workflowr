@@ -8,9 +8,11 @@
     ]
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter backend --filter frontend dev",
-    "dev:backend": "pnpm --filter backend dev",
-    "build:backend": "pnpm --filter backend build",
+    "dev": "pnpm --filter context-engine db:push && pnpm --filter context-engine build && pnpm --parallel --filter backend --filter frontend dev",
+    "dev:backend": "pnpm --filter context-engine db:push && pnpm --filter context-engine build && pnpm --filter backend dev",
+    "build:context-engine": "pnpm --filter context-engine build",
+    "build:backend": "pnpm --filter context-engine build && pnpm --filter backend build",
+    "migrate:context-engine": "pnpm --filter backend migrate:context-engine",
     "dev:frontend": "pnpm --filter frontend dev",
     "build:frontend": "pnpm --filter frontend build"
   }

@@ -244,8 +244,9 @@ export async function runAgent(
 
   // point agent to org tree tools (don't inject full indexes — let it browse)
   if (teamId) {
-    systemPrompt += `\n\nYou have org knowledge tools (org_ls, org_cat, org_grep) to browse the organization tree. The tree has: people/, people/external/, teams/, overview.mdx.
+    systemPrompt += `\n\nYou have org knowledge tools (org_ls, org_cat, org_grep, org_search) backed by the context engine. The tree has: people/, people/external/, teams/, communications/, overview.mdx.
 Every directory has an _index.mdx file with a summary table of all entries — use org_cat on _index.mdx files to get structured overviews instead of listing individual files.
+Use org_search for topic-style questions where there may not be an exact entity path yet.
 Each person has a "confidence" field (high/medium/low). Low confidence means the person was seen in Slack but has no confirmed role or team — they may be inactive, a bot, or just not yet profiled. When answering questions about org size or team composition, distinguish between high-confidence confirmed members and low-confidence incomplete profiles.`;
   }
 
@@ -280,7 +281,7 @@ Each person has a "confidence" field (high/medium/low). Low confidence means the
     if (teamId) {
       const unresolvedIds = [...resolvedContext.matchAll(/<@(U[A-Z0-9]+)>/g)].map((m) => m[1]);
       for (const id of unresolvedIds) {
-        const person = findPersonBySlackId(teamId, id);
+        const person = await findPersonBySlackId(teamId, id);
         if (person?.frontmatter.name) {
           resolvedContext = resolvedContext.replaceAll(`<@${id}>`, person.frontmatter.name);
         }

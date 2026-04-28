@@ -215,7 +215,7 @@ export function registerCommands(app: App) {
     if (existing?.url && existing?.description) {
       // org already set up — show current info + org chart with edit/delete options
       const chart = command.team_id
-        ? [cat(command.team_id, "teams/_index.mdx"), cat(command.team_id, "people/_index.mdx")].filter(Boolean).join("\n\n")
+        ? [await cat(command.team_id, "teams/_index.mdx"), await cat(command.team_id, "people/_index.mdx")].filter(Boolean).join("\n\n")
         : "";
       await app.client.chat.postEphemeral({
         channel: command.channel_id,
@@ -387,9 +387,9 @@ export function registerCommands(app: App) {
       text: ":hourglass_flowing_sand: Running backfill — scanning Slack threads...",
     });
 
-    const filesBefore = countFiles(teamId);
-    bootstrapOrgAwareness(app, teamId).then((threadsAnalyzed) => {
-      const filesAfter = countFiles(teamId);
+    const filesBefore = await countFiles(teamId);
+    bootstrapOrgAwareness(app, teamId).then(async (threadsAnalyzed) => {
+      const filesAfter = await countFiles(teamId);
       const newFiles = filesAfter - filesBefore;
       app.client.chat.postEphemeral({
         channel: command.channel_id,

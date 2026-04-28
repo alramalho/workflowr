@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "concurrently -n app,tunnel -c blue,green \"tsx watch src/app.ts\" \"lt --port 3847 --subdomain chatarmin-workflowr\"",
     "build": "tsc",
+    "migrate:context-engine": "pnpm --filter context-engine db:push && pnpm --filter context-engine build && tsx src/scripts/migrate-org-files-to-context-engine.ts",
     "start": "node dist/app.js"
   },
   "packageManager": "pnpm@10.24.0",
@@ -19,6 +20,7 @@
     "ai": "^6.0.105",
     "better-sqlite3": "^12.6.2",
     "bullmq": "^5.71.0",
+    "context-engine": "workspace:*",
     "dedent": "^1.7.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
