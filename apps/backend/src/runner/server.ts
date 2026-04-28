@@ -7,7 +7,6 @@ import {
   updateRunnerStatus,
   updateRunnerCwd,
   upsertRunnerDirectory,
-  deleteRunnerDirectories,
   getRunnerDirectories,
 } from "../db/runners.js";
 
@@ -92,6 +91,12 @@ function handleRunnerMessage(conn: ConnectedRunner, msg: any) {
     case "register": {
       updateRunnerCwd(conn.runnerId, msg.cwd);
       console.log(`[runner] Registered CWD: ${msg.cwd}`);
+      // only scan on first connect — skip if we already have directories stored
+      const existingDirs = getRunnerDirectories(conn.runnerId);
+      if (existingDirs.length > 0) {
+        console.log(`[runner] Skipping scan — ${existingDirs.length} directories already stored`);
+        break;
+      }
       // trigger initial scan
       sendToRunner(conn.runnerId, {
         type: "task",
@@ -148,7 +153,6 @@ async function handleScanResult(conn: ConnectedRunner, result: string) {
     const directories: { name: string; summary: string }[] = JSON.parse(jsonMatch[0]);
 
     // store raw scan results (descriptions will be filled in by user)
-    deleteRunnerDirectories(conn.runnerId);
     for (const dir of directories) {
       upsertRunnerDirectory(conn.runnerId, dir.name, dir.name, dir.summary);
     }

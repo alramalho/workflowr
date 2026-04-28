@@ -528,6 +528,12 @@ export function createOrchestratorTools(ctx: SubagentContext) {
             thread_ts: ctx.threadTs,
             text: message,
           });
+          // Re-set loading status — chat.postMessage clears the assistant typing indicator
+          if (ctx.threadTs) {
+            await ctx.app.client.assistant.threads
+              .setStatus({ channel_id: ctx.channelId, thread_ts: ctx.threadTs, status: "working...", loading_messages: ["working..."] })
+              .catch(() => {});
+          }
           return { posted: true };
         } catch (err: any) {
           return { posted: false, error: err.message };

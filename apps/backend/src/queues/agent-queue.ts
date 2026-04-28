@@ -1,4 +1,4 @@
-import { Queue, Worker, type Job } from "bullmq";
+import { Queue, Worker, UnrecoverableError, type Job } from "bullmq";
 import type { App } from "@slack/bolt";
 import { createBullMQConnection, KEY_PREFIX } from "../redis.js";
 import { runAgent } from "../agent/index.js";
@@ -36,8 +36,21 @@ export const agentQueue = new Queue<AgentJobData>(QUEUE_NAME, {
   },
 });
 
+const activeAborts = new Map<string, AbortController>();
+
+function threadKey(channelId: string, threadTs: string | undefined): string {
+  return `${channelId}-${threadTs ?? "dm"}`;
+}
+
 export function enqueueAgentJob(data: AgentJobData): Promise<Job<AgentJobData>> {
   const jobId = `${data.channelId}-${data.messageTs}`;
+  const key = threadKey(data.channelId, data.threadTs);
+  const existing = activeAborts.get(key);
+  if (existing) {
+    console.log(`[agent-queue] superseding active job in thread ${key}`);
+    existing.abort(new DOMException("superseded by newer message", "AbortError"));
+    activeAborts.delete(key);
+  }
   return agentQueue.add("agent", data, { jobId });
 }
 
@@ -89,6 +102,10 @@ async function processAgentJob(job: Job<AgentJobData>, app: App) {
       .catch(() => {});
   };
 
+  const key = threadKey(channelId, threadTs);
+  const controller = new AbortController();
+  activeAborts.set(key, controller);
+
   try {
     const result = await runAgent(
       app,
@@ -104,6 +121,8 @@ async function processAgentJob(job: Job<AgentJobData>, app: App) {
       decodedFiles,
       job.id!,
       recoveryMessages ?? undefined,
+      undefined,
+      controller.signal,
     );
 
     await app.client.assistant.threads.setStatus({ channel_id: channelId, thread_ts: threadTs, status: "" });
@@ -135,6 +154,12 @@ async function processAgentJob(job: Job<AgentJobData>, app: App) {
       .setStatus({ channel_id: channelId, thread_ts: threadTs, status: "" })
       .catch(() => {});
 
+    const superseded = controller.signal.aborted && (controller.signal.reason as any)?.message === "superseded by newer message";
+    if (superseded) {
+      console.log(`[agent-queue] job ${job.id} superseded — no retry, no error message`);
+      throw new UnrecoverableError("superseded by newer message");
+    }
+
     // Only post error message on the final attempt
     if (job.attemptsMade >= (job.opts.attempts ?? 2)) {
       await app.client.chat
@@ -147,5 +172,9 @@ async function processAgentJob(job: Job<AgentJobData>, app: App) {
     }
 
     throw error;
+  } finally {
+    if (activeAborts.get(key) === controller) {
+      activeAborts.delete(key);
+    }
   }
 }

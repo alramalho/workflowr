@@ -1,5 +1,38 @@
 import type { App } from "@slack/bolt";
 
+const SLACK_AUTH_ERRORS = new Set([
+  "invalid_auth",
+  "not_authed",
+  "token_revoked",
+  "token_expired",
+  "account_inactive",
+  "missing_scope",
+]);
+
+export function isSlackAuthError(err: unknown): boolean {
+  const code = (err as any)?.data?.error ?? (err as any)?.error ?? (err as any)?.message;
+  return typeof code === "string" && [...SLACK_AUTH_ERRORS].some((e) => code.includes(e));
+}
+
+let botConnectionCache: { ok: boolean; reason?: string; checkedAt: number } | null = null;
+const BOT_CONNECTION_TTL_MS = 60_000;
+
+export async function checkBotConnection(app: App): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const now = Date.now();
+  if (botConnectionCache && now - botConnectionCache.checkedAt < BOT_CONNECTION_TTL_MS) {
+    return botConnectionCache.ok ? { ok: true } : { ok: false, reason: botConnectionCache.reason! };
+  }
+  try {
+    await app.client.auth.test();
+    botConnectionCache = { ok: true, checkedAt: now };
+    return { ok: true };
+  } catch (err) {
+    const reason = (err as any)?.data?.error ?? (err as any)?.message ?? "unknown";
+    botConnectionCache = { ok: false, reason, checkedAt: now };
+    return { ok: false, reason };
+  }
+}
+
 function slackToCanvasMentions(md: string): string {
   return md
     .replace(/<@(U[A-Z0-9]+)>/g, "![](@$1)")

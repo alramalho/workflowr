@@ -6,6 +6,7 @@ import dedent from "dedent";
 import { config } from "../config.js";
 import { createOrchestratorTools } from "./subagents.js";
 import { ArtifactStore } from "./artifacts.js";
+import { checkBotConnection } from "../integrations/slack.js";
 import * as sm from "../integrations/supermemory.js";
 import { ALLOWED_USERS } from "../listeners/events.js";
 import { findPersonBySlackId } from "../org/propagate.js";
@@ -191,8 +192,20 @@ export async function runAgent(
   jobId?: string,
   recoveryMessages?: any[],
   onToolStep?: (step: { tools: { name: string; input: unknown; output: string }[] }) => void,
+  externalAbortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   const startTime = Date.now();
+
+  const botConn = await checkBotConnection(app);
+  if (!botConn.ok) {
+    console.warn(`[agent] Slack bot disconnected (${botConn.reason}) — short-circuiting`);
+    return {
+      text: `Slack workspace not connected (\`${botConn.reason}\`). The bot token is invalid or the app was uninstalled — please reinstall the Slack app to reconnect.`,
+      toolCalls: [],
+      latencyMs: Date.now() - startTime,
+    };
+  }
+
   const model = config.ai.model;
   const toolHistory: { tool: string; input: unknown; output: unknown }[] = [];
   const artifacts = new ArtifactStore();
@@ -313,7 +326,9 @@ Each person has a "confidence" field (high/medium/low). Low confidence means the
     messages,
     tools,
     stopWhen: stepCountIs(15),
-    abortSignal: AbortSignal.timeout(120_000),
+    abortSignal: externalAbortSignal
+      ? AbortSignal.any([externalAbortSignal, AbortSignal.timeout(120_000)])
+      : AbortSignal.timeout(120_000),
     onStepFinish({ toolCalls, toolResults, response }) {
       for (const tc of toolCalls) {
         const matching = toolResults.find((tr: any) => tr.toolCallId === tc.toolCallId);
